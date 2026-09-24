@@ -60,22 +60,45 @@ class ApiClient:
         self.usuario = None
 
     # ---------------- proyectos ----------------
-    def listar_proyectos(self):
-        # TODO: confirmar el path real en routers/proyecto.py (ej. GET /proyectos)
-        return self._request("GET", "/proyectos")
+    def listar_proyectos(self, estado: str | None = "activo"):
+        """GET /proyectos?estado=activo|archivado|todo"""
+        params = {"estado": estado} if estado else {}
+        return self._request("GET", "/proyectos", params=params)
+
+    # ---------------- etiquetas ----------------
+    def listar_etiquetas(self, estado: str = "activo"):
+        """GET /etiquetas?estado=activo|archivado|todo"""
+        params = {"estado": estado}
+        return self._request("GET", "/etiquetas", params=params)
 
     # ---------------- rastreador: temporizador ----------------
     def obtener_temporizador_activo(self):
         return self._request("GET", "/rastreador/tiempo/activo")
 
-    def iniciar_temporizador(self, proyecto_id: int, descripcion: str = "", tarea_id: int | None = None):
-        body = {"proyecto_id": proyecto_id, "descripcion": descripcion, "tarea_id": tarea_id}
+    def iniciar_temporizador(
+        self,
+        proyecto_id: int,
+        descripcion: str = "",
+        tarea_id: int | None = None,
+        etiquetas_ids: list[int] | None = None,
+    ):
+        body = {
+            "proyecto_id": proyecto_id,
+            "descripcion": descripcion,
+            "tarea_id": tarea_id,
+            "etiquetas_ids": etiquetas_ids or [],
+        }
         return self._request("POST", "/rastreador/tiempo/iniciar", json=body)
 
     def detener_temporizador(self):
         return self._request("POST", "/rastreador/tiempo/detener")
 
-    def historial_tiempos(self, proyecto_id: int | None = None, fecha_desde: str | None = None, fecha_hasta: str | None = None):
+    def historial_tiempos(
+        self,
+        proyecto_id: int | None = None,
+        fecha_desde: str | None = None,
+        fecha_hasta: str | None = None,
+    ):
         params = {}
         if proyecto_id is not None:
             params["proyecto_id"] = proyecto_id
@@ -90,3 +113,48 @@ class ApiClient:
 
     def resumen(self):
         return self._request("GET", "/rastreador/resumen")
+
+    # ---------------- rastreador: tareas ----------------
+    def listar_tareas(self, proyecto_id: int):
+        return self._request("GET", "/rastreador/tareas", params={"proyecto_id": proyecto_id})
+
+    # ---------------- rastreador: entrada manual ----------------
+    def crear_entrada_manual(
+        self,
+        proyecto_id: int,
+        inicio: str,
+        fin: str,
+        tarea_id: int | None = None,
+        descripcion: str | None = None,
+        etiqueta_id: int | None = None,
+    ):
+        body = {
+            "proyecto_id": proyecto_id,
+            "tarea_id": tarea_id,
+            "descripcion": descripcion,
+            "inicio": inicio,
+            "fin": fin,
+            "etiqueta_id": etiqueta_id,
+        }
+        return self._request("POST", "/rastreador/tiempo/manual", json=body)
+        # ---------------- crear tarea ----------------
+    def crear_tarea(self, titulo: str, proyecto_id: int,
+                    estado: str = "PENDIENTE",
+                    prioridad: str = "MEDIA"):
+        body = {
+            "titulo": titulo,
+            "proyecto_id": proyecto_id,
+            "estado": estado,
+            "prioridad": prioridad,
+            "horas": 0.0,
+            "etiqueta_ids": [],
+        }
+        return self._request("POST", "/rastreador/tareas", json=body)
+
+    # ---------------- crear etiqueta ----------------
+    def crear_etiqueta(self, nombre: str, color: str = "#10a5f5"):
+        body = {
+            "nombre": nombre,
+            "color": color,
+        }
+        return self._request("POST", "/etiquetas", json=body)
