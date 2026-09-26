@@ -158,3 +158,15 @@ class ApiClient:
             "color": color,
         }
         return self._request("POST", "/etiquetas", json=body)
+    def ajustar_tiempo(self, registro_id: int, segundos_descontar: int):
+        """
+        Descuenta segundos de un registro activo (por inactividad).
+        """
+        return self._request(
+            "POST",
+            "/rastreador/tiempo/ajustar",
+             params={
+                "registro_id": registro_id,
+                "segundos_descontar": segundos_descontar,
+        },
+    )

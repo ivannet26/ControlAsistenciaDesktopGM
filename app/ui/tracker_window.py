@@ -1,5 +1,5 @@
 from datetime import date, datetime, timedelta
-
+from app.ui.dialogs import confirmar_eliminar, alerta_error
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
@@ -7,7 +7,8 @@ from PySide6.QtWidgets import (
     QMenu, QDialog, QFormLayout, QDialogButtonBox
 )
 from PySide6.QtGui import QAction
-
+from app.services.inactividad import MonitorInactividad
+from app.ui.dialogs.modal_inactividad import ModalInactividad
 from app.services.api_client import ApiClient
 from app.ui.common import ApiWorker, formatear_duracion
 
@@ -79,7 +80,6 @@ class TrackerWindow(QWidget):
         self.segundos_transcurridos = 0
         self._workers = []
 
-        # Lista de etiquetas seleccionadas (objetos completos {id, nombre, color})
         self.etiquetas_seleccionadas = []
 
         self.setWindowTitle(f"Control de Asistencia - {usuario.get('nombre', '')}")
@@ -96,13 +96,24 @@ class TrackerWindow(QWidget):
         self._revisar_temporizador_activo()
         self._cargar_historial()
 
+        # Monitor de inactividad
+        self.monitor_inactividad = MonitorInactividad(
+            umbral_segundos=300,
+            padre=self,
+        )
+        self.monitor_inactividad.inactividad_detectada.connect(
+            self._on_inactividad_detectada
+        )
+        self.monitor_inactividad.actividad_reanudada.connect(
+            self._on_actividad_reanudada
+        )
+
     # ================= UI =================
     def _armar_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(10)
 
-        # -------- Mensaje de error/éxito integrado --------
         self.label_mensaje = QLabel("")
         self.label_mensaje.setVisible(False)
         self.label_mensaje.setWordWrap(True)
@@ -127,7 +138,6 @@ class TrackerWindow(QWidget):
         """)
         fila_desc.addWidget(self.descripcion_input, 1)
 
-        # Botón "+" para crear tarea o etiqueta
         self.boton_agregar = QPushButton("+")
         self.boton_agregar.setFixedSize(42, 42)
         self.boton_agregar.setCursor(Qt.PointingHandCursor)
@@ -165,7 +175,7 @@ class TrackerWindow(QWidget):
         self._estilizar_combo(self.combo_tarea)
         layout.addWidget(self.combo_tarea)
 
-        # -------- Selector de etiquetas (chips) --------
+        # -------- Selector de etiquetas --------
         self._armar_selector_etiquetas(layout)
 
         # -------- Fila del timer --------
@@ -234,7 +244,6 @@ class TrackerWindow(QWidget):
         layout.addWidget(self.scroll_historial, 1)
 
     def _armar_selector_etiquetas(self, layout):
-        """Panel de selección múltiple de etiquetas."""
         contenedor = QWidget()
         contenedor.setStyleSheet(f"""
             QWidget {{
@@ -247,7 +256,6 @@ class TrackerWindow(QWidget):
         layout_interno.setContentsMargins(8, 6, 8, 6)
         layout_interno.setSpacing(4)
 
-        # Fila con el label + combo para agregar
         fila_agregar = QHBoxLayout()
         fila_agregar.setSpacing(6)
 
@@ -290,7 +298,6 @@ class TrackerWindow(QWidget):
         fila_agregar.addWidget(self.combo_etiqueta, 1)
         layout_interno.addLayout(fila_agregar)
 
-        # Contenedor donde se muestran los chips de etiquetas seleccionadas
         self.chips_container = QWidget()
         self.chips_container.setStyleSheet("background: transparent; border: none;")
         self.chips_layout = QHBoxLayout(self.chips_container)
@@ -304,36 +311,40 @@ class TrackerWindow(QWidget):
 
     def _estilizar_combo(self, combo: QComboBox):
         combo.setStyleSheet(f"""
-            QComboBox {{
-                background-color: #101b22;
-                border: 1px solid {COLOR_BORDE};
-                color: {COLOR_TEXTO};
-                padding: 8px 12px;
-                font-size: 13px;
-                border-radius: 2px;
-            }}
-            QComboBox:focus {{ border: 1px solid {COLOR_ACENTO}; }}
-            QComboBox:disabled {{
-                color: {COLOR_TEXTO_SECUNDARIO};
-                background-color: #0a1218;
-            }}
-            QComboBox::drop-down {{ border: none; width: 24px; }}
-            QComboBox::down-arrow {{
-                image: none;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-top: 6px solid {COLOR_TEXTO_SECUNDARIO};
-                margin-right: 8px;
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: #101b22;
-                border: 1px solid {COLOR_BORDE};
-                color: {COLOR_TEXTO};
-                selection-background-color: {COLOR_ACENTO};
-                selection-color: white;
-                outline: none;
-            }}
-        """)
+        QComboBox {{
+            background-color: #101b22;
+            border: 1px solid {COLOR_BORDE};
+            color: {COLOR_TEXTO};
+            padding: 8px 12px;
+            font-size: 13px;
+            border-radius: 2px;
+        }}
+        QComboBox:focus {{
+            border: 1px solid {COLOR_ACENTO};
+        }}
+        QComboBox:disabled {{
+            color: {COLOR_TEXTO_SECUNDARIO};
+            background-color: #0a1218;
+        }}
+        QComboBox::drop-down {{
+            border: none;
+            background: transparent;
+            width: 0px;
+        }}
+        QComboBox::down-arrow {{
+            image: none;
+            width: 0px;
+            height: 0px;
+        }}
+        QComboBox QAbstractItemView {{
+            background-color: #101b22;
+            border: 1px solid {COLOR_BORDE};
+            color: {COLOR_TEXTO};
+            selection-background-color: {COLOR_ACENTO};
+            selection-color: white;
+            outline: none;
+        }}
+    """)
 
     def _estilizar_boton_play(self, corriendo: bool):
         color = "#e53935" if corriendo else COLOR_ACENTO
@@ -351,7 +362,7 @@ class TrackerWindow(QWidget):
             QPushButton:hover {{ background-color: {hover}; }}
         """)
 
-    # ================= MANEJO DE MENSAJES =================
+    # ================= MENSAJES =================
     def _mostrar_mensaje(self, texto: str, tipo: str = "error"):
         self.label_mensaje.setText(texto)
         if tipo == "error":
@@ -364,7 +375,7 @@ class TrackerWindow(QWidget):
                 font-weight: 600;
                 border-radius: 3px;
             """)
-        else:  # success
+        else:
             self.label_mensaje.setStyleSheet(f"""
                 background-color: #1f4a1f;
                 color: #ffffff;
@@ -443,12 +454,10 @@ class TrackerWindow(QWidget):
         if not etiqueta:
             return
 
-        # Evitar duplicados
         ids_actuales = [e["id"] for e in self.etiquetas_seleccionadas]
         if etiqueta.get("id") not in ids_actuales:
             self.etiquetas_seleccionadas.append(etiqueta)
 
-        # Resetear combo
         self.combo_etiqueta.blockSignals(True)
         self.combo_etiqueta.setCurrentIndex(0)
         self.combo_etiqueta.blockSignals(False)
@@ -462,7 +471,6 @@ class TrackerWindow(QWidget):
         self._renderizar_chips()
 
     def _renderizar_chips(self):
-        # Limpiar layout anterior
         while self.chips_layout.count() > 1:
             item = self.chips_layout.takeAt(0)
             if item.widget():
@@ -706,7 +714,7 @@ class TrackerWindow(QWidget):
         self._mostrar_mensaje(f"Etiqueta '{etiqueta.get('nombre', '')}' creada", "success")
         self._cargar_etiquetas()
 
-    # ================= CARGA DEL HISTORIAL =================
+    # ================= HISTORIAL =================
     def _revisar_temporizador_activo(self):
         self._lanzar(self.client.obtener_temporizador_activo, self._on_temporizador_activo)
 
@@ -719,13 +727,14 @@ class TrackerWindow(QWidget):
         self.segundos_transcurridos = int((ahora - inicio).total_seconds())
         self.descripcion_input.setText(registro.get("descripcion") or "")
 
-        # Cargar etiquetas del registro activo
         self.etiquetas_seleccionadas = registro.get("etiquetas") or []
         self._renderizar_chips()
 
         self.label_tiempo.setText(formatear_duracion(self.segundos_transcurridos))
         self._set_estado_corriendo(True)
         self.reloj.start(1000)
+
+        self.monitor_inactividad.iniciar()
 
     def _cargar_historial(self):
         hace_21_dias = (date.today() - timedelta(days=21)).isoformat()
@@ -798,7 +807,6 @@ class TrackerWindow(QWidget):
         header.setStyleSheet(f"""
             background-color: {COLOR_HEADER_SEMANA};
             border-radius: 2px;
-            border: 1px solid {COLOR_BORDE};
         """)
         header.setFixedHeight(36)
         layout = QHBoxLayout(header)
@@ -873,7 +881,6 @@ class TrackerWindow(QWidget):
         layout_principal.setContentsMargins(12, 8, 12, 8)
         layout_principal.setSpacing(3)
 
-        # -------- Fila 1: descripción + duración + botones --------
         fila1 = QHBoxLayout()
         fila1.setSpacing(8)
 
@@ -898,7 +905,6 @@ class TrackerWindow(QWidget):
         """)
         fila1.addWidget(label_duracion)
 
-        # Botón ▶ (reanudar)
         btn_play = QPushButton("▶")
         btn_play.setFixedSize(26, 26)
         btn_play.setCursor(Qt.PointingHandCursor)
@@ -909,13 +915,14 @@ class TrackerWindow(QWidget):
                 color: {COLOR_ACENTO};
                 border: none;
                 font-size: 12px;
+                outline: none;
             }}
             QPushButton:hover {{ color: white; }}
+            QPushButton:focus {{ outline: none; }}
         """)
         btn_play.clicked.connect(lambda _, r=registro: self._reanudar_registro(r))
         fila1.addWidget(btn_play)
 
-        # Botón ✕ (eliminar)
         btn_del = QPushButton("✕")
         btn_del.setFixedSize(26, 26)
         btn_del.setCursor(Qt.PointingHandCursor)
@@ -926,15 +933,16 @@ class TrackerWindow(QWidget):
                 color: {COLOR_TEXTO_SECUNDARIO};
                 border: none;
                 font-size: 12px;
+                outline: none;
             }}
             QPushButton:hover {{ color: {COLOR_ERROR}; }}
+            QPushButton:focus {{ outline: none; }}
         """)
         btn_del.clicked.connect(lambda _, rid=registro.get("id"): self._eliminar_registro(rid))
         fila1.addWidget(btn_del)
 
         layout_principal.addLayout(fila1)
 
-        # -------- Fila 2: proyecto · tarea | hora inicio - fin --------
         fila2 = QHBoxLayout()
         fila2.setSpacing(8)
 
@@ -970,7 +978,6 @@ class TrackerWindow(QWidget):
 
         layout_principal.addLayout(fila2)
 
-        # -------- Fila 3: etiquetas --------
         etiquetas = registro.get("etiquetas") or []
         if etiquetas:
             fila3 = QHBoxLayout()
@@ -995,7 +1002,6 @@ class TrackerWindow(QWidget):
 
     # ================= REANUDAR / ELIMINAR =================
     def _reanudar_registro(self, registro: dict):
-        """Precarga los datos del registro y arranca el temporizador."""
         if self.registro_activo:
             self._mostrar_mensaje("Ya tienes un temporizador activo. Deténlo primero.", "error")
             return
@@ -1020,15 +1026,12 @@ class TrackerWindow(QWidget):
         if not registro_id:
             return
 
-        respuesta = QMessageBox.question(
-            self,
-            "Eliminar actividad",
-            "¿Estás seguro de eliminar esta actividad? Esta acción no se puede deshacer.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-
-        if respuesta != QMessageBox.Yes:
+        if not confirmar_eliminar(
+            padre=self,
+            titulo="Eliminar actividad",
+            mensaje="¿Estás seguro de eliminar esta actividad?",
+            subtitulo="Esta acción no se puede deshacer.",
+        ):
             return
 
         self._lanzar(
@@ -1072,30 +1075,25 @@ class TrackerWindow(QWidget):
         if self.registro_activo:
             return
 
-        # Validación de descripción
         descripcion = self.descripcion_input.text().strip()
         if not descripcion:
             self._mostrar_mensaje("Escribe en qué estás trabajando antes de iniciar", "error")
             return
 
-        # Validación de proyecto
         proyecto_id = self.combo_proyecto.currentData()
         if proyecto_id is None:
             self._mostrar_mensaje("Selecciona un proyecto antes de iniciar", "error")
             return
 
-        # Validación de tarea
         tarea_id = self.combo_tarea.currentData()
         if tarea_id is None:
             self._mostrar_mensaje("Selecciona una tarea antes de iniciar", "error")
             return
 
-        # Validación de etiquetas
         if not self.etiquetas_seleccionadas:
             self._mostrar_mensaje("Agrega al menos una etiqueta antes de iniciar", "error")
             return
 
-        # Aplicar tarea pendiente (si venía de reanudar)
         if hasattr(self, "_tarea_pendiente_id") and self._tarea_pendiente_id is not None:
             idx = self.combo_tarea.findData(self._tarea_pendiente_id)
             if idx >= 0:
@@ -1120,12 +1118,15 @@ class TrackerWindow(QWidget):
         self.label_tiempo.setText("00:00:00")
         self._set_estado_corriendo(True)
         self.reloj.start(1000)
+        self.monitor_inactividad.iniciar()
 
     def _detener(self):
         self.reloj.stop()
         self._lanzar(self.client.detener_temporizador, self._on_detenido)
 
     def _on_detenido(self, registro):
+        self.monitor_inactividad.detener()
+
         self.registro_activo = None
         self.segundos_transcurridos = 0
         self.label_tiempo.setText("00:00:00")
@@ -1135,3 +1136,83 @@ class TrackerWindow(QWidget):
         self._renderizar_chips()
         self.combo_tarea.setCurrentIndex(0)
         self._cargar_historial()
+
+    # ================= MANEJO DE INACTIVIDAD =================
+    def _on_inactividad_detectada(self, segundos_inactivo: int):
+        """Maneja la inactividad detectada."""
+        import time
+
+        # Pausar el reloj local
+        self.reloj.stop()
+
+        # Guardar hora de inicio de la inactividad
+        self._inicio_inactividad = self.monitor_inactividad.ultima_actividad
+
+        minutos = max(1, int(round(segundos_inactivo / 60)))
+
+        modal = ModalInactividad(
+            padre=self,
+            minutos_inactivo=minutos,
+            actividad=self.descripcion_input.text().strip() or "(sin descripción)",
+            segundos_inactivo_inicial=segundos_inactivo,
+        )
+        modal.exec()
+
+        # Calcular el tiempo total inactivo
+        ahora = time.time()
+        segundos_totales = int(ahora - self._inicio_inactividad)
+
+        if self.registro_activo:
+            registro_id = self.registro_activo.get("id")
+
+            self._lanzar(
+                self.client.ajustar_tiempo,
+                self._on_tiempo_ajustado,
+                registro_id=registro_id,
+                segundos_descontar=segundos_totales,
+            )
+        else:
+            # Si no hay registro activo, solo reanudar
+            self.reloj.start(1000)
+
+    def _on_tiempo_ajustado(self, registro_actualizado):
+        if not registro_actualizado:
+            return
+
+        self.registro_activo = registro_actualizado
+
+        inicio = datetime.fromisoformat(registro_actualizado["inicio"])
+        ahora = datetime.now(inicio.tzinfo) if inicio.tzinfo else datetime.now()
+        self.segundos_transcurridos = max(
+            0, int((ahora - inicio).total_seconds())
+        )
+        self.label_tiempo.setText(
+            formatear_duracion(self.segundos_transcurridos)
+        )
+
+        self.reloj.start(1000)
+
+        self._mostrar_mensaje(
+            "Tiempo de inactividad descontado correctamente",
+            "success"
+        )
+
+    def _on_actividad_reanudada(self, segundos_inactivo: int):
+        """Se dispara cuando el usuario vuelve tras estar inactivo."""
+        pass
+
+    # ================= CIERRE DE VENTANA =================
+    def closeEvent(self, event):
+        """Se llama cuando el usuario cierra la ventana."""
+        if hasattr(self, "monitor_inactividad"):
+            self.monitor_inactividad.detener()
+
+        if hasattr(self, "reloj"):
+            self.reloj.stop()
+
+        for worker in self._workers:
+            if worker.isRunning():
+                worker.quit()
+                worker.wait(500)
+
+        event.accept()
