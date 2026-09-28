@@ -31,6 +31,7 @@ MAX_CHARS_CHIP = 24
 
 class TrackerWindow(QWidget):
     cerrar_sesion = Signal()
+
     def __init__(self, client: ApiClient, usuario: dict):
         super().__init__()
         self.client = client
@@ -46,10 +47,14 @@ class TrackerWindow(QWidget):
         self._tareas_por_proyecto = {}
 
         self.setWindowTitle(f"Control de Asistencia - {usuario.get('nombre', '')}")
+        self.setWindowFlag(Qt.FramelessWindowHint)
+        # ✅ Elimina el borde fantasma de Windows
+        self.setAttribute(Qt.WA_TranslucentBackground)
+
         self.resize(420, 600)
         self.setMinimumWidth(380)
         self.setMinimumHeight(480)
-        self.setStyleSheet(S.QSS_TRACKER_WINDOW)
+        # ❌ NO aplicar setStyleSheet aquí
 
         self._armar_ui()
 
@@ -62,34 +67,53 @@ class TrackerWindow(QWidget):
         self._precargar_proyectos()
         self._precargar_etiquetas()
 
-        self.monitor_inactividad = MonitorInactividad(umbral_segundos=10, padre=self)
+        self.monitor_inactividad = MonitorInactividad(umbral_segundos=300, padre=self)
         self.monitor_inactividad.inactividad_detectada.connect(self._on_inactividad_detectada)
         self.monitor_inactividad.actividad_reanudada.connect(self._on_actividad_reanudada)
 
     # ================= UI =================
     def _armar_ui(self):
+        from app.ui.custom_title_bar import CustomTitleBar
+
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Barra personalizada (blanca)
+        self.title_bar = CustomTitleBar(
+            self,
+            f"Control de Asistencia - {self.usuario.get('nombre', '')}",
+            mostrar_maximizar=True,
+        )
+        layout.addWidget(self.title_bar)
+
+        # Contenedor con fondo oscuro del tracker
+        contenido = QWidget()
+        contenido.setObjectName("contenidoTracker")
+        contenido.setAttribute(Qt.WA_StyledBackground, True)
+        # Extraer solo el background del QSS del tracker
+        contenido.setStyleSheet(
+            "QWidget#contenidoTracker { background-color: #0d181f; }"
+        )
+        contenido_layout = QVBoxLayout(contenido)
+        contenido_layout.setContentsMargins(14, 14, 14, 14)
+        contenido_layout.setSpacing(10)
 
         self.header = HeaderWidget(self.usuario.get("nombre", ""))
         self.header.cerrar_sesion.connect(self._on_cerrar_sesion)
-        layout.addWidget(self.header)
-        layout.addWidget(self._separador())
+        contenido_layout.addWidget(self.header)
+        contenido_layout.addWidget(self._separador())
 
-        # Mensaje
         self.label_mensaje = QLabel("")
         self.label_mensaje.setVisible(False)
         self.label_mensaje.setWordWrap(True)
-        layout.addWidget(self.label_mensaje)
+        contenido_layout.addWidget(self.label_mensaje)
 
-        # Caja unificada
         self.entrada_box = EntradaBox()
         self.entrada_box.abrir_modal.connect(self._abrir_modal_entrada)
         self.entrada_box.play_clicked.connect(self._on_play_stop)
-        layout.addWidget(self.entrada_box)
+        contenido_layout.addWidget(self.entrada_box)
 
-        # ----- Preview: una sola fila (HBoxLayout) -----
         self.preview_container = QWidget()
         self.preview_container.setVisible(False)
         self.preview_container.setSizePolicy(
@@ -98,15 +122,16 @@ class TrackerWindow(QWidget):
         self.preview_layout = QHBoxLayout(self.preview_container)
         self.preview_layout.setContentsMargins(4, 0, 4, 0)
         self.preview_layout.setSpacing(6)
-        layout.addWidget(self.preview_container)
+        contenido_layout.addWidget(self.preview_container)
 
-        layout.addWidget(self._separador())
+        contenido_layout.addWidget(self._separador())
 
-        # Historial
         self.historial = HistorialView()
         self.historial.reanudar.connect(self._reanudar_registro)
         self.historial.eliminar.connect(self._eliminar_registro)
-        layout.addWidget(self.historial, 1)
+        contenido_layout.addWidget(self.historial, 1)
+
+        layout.addWidget(contenido)
 
     def _separador(self):
         linea = QFrame()
@@ -117,7 +142,6 @@ class TrackerWindow(QWidget):
 
     # ================= PREVIEW =================
     def _renderizar_preview(self):
-        # Limpiar
         while self.preview_layout.count():
             item = self.preview_layout.takeAt(0)
             if item.widget():
@@ -129,12 +153,10 @@ class TrackerWindow(QWidget):
             self.entrada_box.set_estado(EntradaBox.ESTADO_VACIO)
             return
 
-        # Descripción en la caja
         self.entrada_box.set_descripcion(
             self._entrada_actual.get("descripcion", "")
         )
 
-        # ----- Chip PROYECTO (con color) -----
         proy = self._entrada_actual.get("proyecto_nombre", "")
         if proy:
             color = self._entrada_actual.get("color_proyecto") or "#10a878"
@@ -145,7 +167,6 @@ class TrackerWindow(QWidget):
             )
             self.preview_layout.addWidget(chip)
 
-        # ----- Chips ETIQUETAS (máx 3 visibles, resto +N) -----
         etiquetas = self._entrada_actual.get("etiquetas", [])
         max_visibles = 3
         visibles = etiquetas[:max_visibles]
@@ -513,6 +534,7 @@ class TrackerWindow(QWidget):
                 worker.quit()
                 worker.wait(500)
         event.accept()
+
     def _on_cerrar_sesion(self):
         if self.registro_activo:
             self._mostrar_mensaje("Detén el temporizador antes de cerrar sesión.", "error")

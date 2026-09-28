@@ -1,3 +1,4 @@
+# app/ui/dialogs/modal_entrada.py
 import os
 
 from PySide6.QtCore import Qt, QDate, QTime, Signal, QTimer
@@ -27,10 +28,9 @@ ALTO_BOTON = 36
 ALTO_CHIP = 20
 ANCHO_MODAL = 460
 PADDING_LATERAL = 20
-LOGO_SIZE = 40
 ANCHO_BADGE_ESTIMADO = 44
 ANCHO_INTERNO = ANCHO_MODAL - (PADDING_LATERAL * 2)   # 420
-ALTO_MINIMO_MODAL = 380
+ALTO_MINIMO_MODAL = 400
 
 
 class ModalEntrada(QDialog):
@@ -62,11 +62,10 @@ class ModalEntrada(QDialog):
 
         self.setWindowTitle("Nueva Entrada de tiempo")
         self.setModal(True)
-        self.setStyleSheet(f"""
-            QDialog {{ background-color: {COLOR_PANEL}; }}
-            QLabel  {{ color: {COLOR_TEXTO}; font-size: 12px; border: none;
-                       background: transparent; }}
-        """)
+
+        # ✅ Quitar barra nativa de Windows + eliminar borde fantasma
+        self.setWindowFlag(Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
 
         self._armar_ui()
         self._poblar_proyectos()
@@ -82,6 +81,13 @@ class ModalEntrada(QDialog):
     def showEvent(self, event):
         super().showEvent(event)
         self._aplicar_tamano()
+        # 🎯 Centrar respecto al padre
+        if self.parent():
+            p_geo = self.parent().geometry()
+            self.move(
+                p_geo.center().x() - self.width() // 2,
+                p_geo.center().y() - self.height() // 2,
+            )
 
     def _recalcular_y_aplicar(self):
         """Calcula el alto mínimo real del layout. Llamar solo al inicio."""
@@ -98,23 +104,33 @@ class ModalEntrada(QDialog):
     # UI
     # ============================================================
     def _armar_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(PADDING_LATERAL, 16, PADDING_LATERAL, 16)
+        from app.ui.custom_title_bar import CustomTitleBar
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # ---------- Barra custom oscura ----------
+        self.title_bar = CustomTitleBar(
+            self,
+            "Nueva Entrada de tiempo",
+            mostrar_maximizar=False,
+            mostrar_minimizar=False,
+        )
+        root.addWidget(self.title_bar)
+
+        # ---------- Contenedor con fondo oscuro ----------
+        contenido = QWidget()
+        contenido.setObjectName("contenidoDialogo")
+        contenido.setAttribute(Qt.WA_StyledBackground, True)
+        contenido.setStyleSheet(
+            f"QWidget#contenidoDialogo {{ background-color: {COLOR_PANEL}; }}"
+        )
+        layout = QVBoxLayout(contenido)
+        layout.setContentsMargins(PADDING_LATERAL, 14, PADDING_LATERAL, 16)
         layout.setSpacing(10)
 
-                # ---------- Título ----------
-        titulo = QLabel("Nueva Entrada de tiempo")
-        titulo.setStyleSheet(f"""
-            color: {COLOR_TEXTO};
-            font-size: 16px;
-            font-weight: 600;
-            background: transparent;
-            border: none;
-            padding: 0;
-        """)
-        layout.addWidget(titulo)
-
-        # Separador
+        # Separador inicial
         linea_top = QFrame()
         linea_top.setFrameShape(QFrame.HLine)
         linea_top.setStyleSheet(f"background-color: {COLOR_BORDE}; border: none;")
@@ -316,6 +332,8 @@ class ModalEntrada(QDialog):
         fila_btn.addWidget(btn_guardar)
 
         layout.addLayout(fila_btn)
+
+        root.addWidget(contenido)
 
     # ============================================================
     # Icono de calendario
@@ -589,7 +607,7 @@ class ModalEntrada(QDialog):
 
         if not self._etiquetas_seleccionadas:
             self.chips_container.setVisible(False)
-            return   # el alto del modal no cambia: la fila está reservada
+            return
 
         self.chips_container.setVisible(True)
 
@@ -739,7 +757,6 @@ class ModalEntrada(QDialog):
             QTimer.singleShot(0, self._aplicar_tamano)
             return
 
-        # Añadir al cache local y recargar el combo de tareas
         if nueva:
             self._tareas_por_proyecto.setdefault(proyecto_id, []).append(nueva)
             self._on_proyecto_change(self.combo_proyecto.currentIndex())
@@ -823,7 +840,6 @@ class ModalEntrada(QDialog):
             QTimer.singleShot(0, self._aplicar_tamano)
             return
 
-        # Buscar el color del proyecto seleccionado
         color_proyecto = "#10a878"
         for p in self._proyectos:
             if p.get("id") == proyecto_id:

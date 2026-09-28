@@ -5,11 +5,11 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QFrame, QMessageBox,
+    QPushButton, QFrame, QMessageBox, QWidget,
 )
 
 from app.styles.colors import (
-    COLOR_PANEL, COLOR_BORDE, COLOR_BORDE_INPUT, COLOR_INPUT_BG,
+    COLOR_FONDO, COLOR_PANEL, COLOR_BORDE, COLOR_BORDE_INPUT, COLOR_INPUT_BG,
     COLOR_TEXTO, COLOR_TEXTO_SECUNDARIO, COLOR_TEXTO_TERCIARIO,
     COLOR_ACENTO, COLOR_ACENTO_HOVER, COLOR_ACENTO_PRESSED,
     RADIO_INPUT,
@@ -19,20 +19,21 @@ from app.styles.colors import (
 ANCHO_DIALOGO = 400
 ALTO_INPUT = 34
 ALTO_BOTON = 30
-LOGO_MAX_W = 130
-LOGO_MAX_H = 32
 
 
 class DialogoRegistro(QDialog):
     """Diálogo para crear una cuenta nueva."""
 
-    ir_a_login = Signal()   # ⬅️ FIX: indentación correcta
+    ir_a_login = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Crear cuenta")
+        self.setWindowTitle("Control de Asistencia")
         self.setModal(True)
-        self.setStyleSheet(f"QDialog {{ background-color: {COLOR_PANEL}; }}")
+
+        # 🎨 Quitar barra nativa de Windows + quitar borde fantasma
+        self.setWindowFlag(Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
 
         self._armar_ui()
         self._ajustar_altura()
@@ -40,6 +41,13 @@ class DialogoRegistro(QDialog):
     def showEvent(self, event):
         super().showEvent(event)
         self._ajustar_altura()
+        # 🎯 Centrar respecto al padre
+        if self.parent():
+            p_geo = self.parent().geometry()
+            self.move(
+                p_geo.center().x() - self.width() // 2,
+                p_geo.center().y() - self.height() // 2,
+            )
 
     def _ajustar_altura(self):
         self.layout().invalidate()
@@ -52,34 +60,52 @@ class DialogoRegistro(QDialog):
     # UI
     # ============================================================
     def _armar_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        from app.ui.custom_title_bar import CustomTitleBar
 
-        # ---------- Header: logo + título ----------
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # ---------- Barra de título oscura (igual que el login) ----------
+        self.title_bar = CustomTitleBar(
+            self,
+            "Control de Asistencia",
+            mostrar_maximizar=False,
+            mostrar_minimizar=False,
+        )
+        root.addWidget(self.title_bar)
+
+        # ---------- Contenedor con fondo oscuro ----------
+        contenido = QWidget()
+        contenido.setObjectName("contenidoRegistro")
+        contenido.setAttribute(Qt.WA_StyledBackground, True)
+        contenido.setStyleSheet(
+            f"QWidget#contenidoRegistro {{ background-color: {COLOR_FONDO}; }}"
+        )
+        contenido_layout = QVBoxLayout(contenido)
+        contenido_layout.setContentsMargins(0, 0, 0, 0)
+        contenido_layout.setSpacing(0)
+
+        # ---------- Título (sin logo) ----------
         header = QVBoxLayout()
         header.setContentsMargins(18, 18, 18, 14)
         header.setSpacing(8)
-
-        label_logo = self._crear_logo()
-        if label_logo is not None:
-            header.addWidget(label_logo, 0, Qt.AlignCenter)
 
         titulo = QLabel("Crear cuenta")
         titulo.setAlignment(Qt.AlignCenter)
         titulo.setStyleSheet(f"""
             color: {COLOR_TEXTO};
-            font-size: 15px;
+            font-size: 18px;
             font-weight: 600;
             border: none;
             background: transparent;
         """)
         header.addWidget(titulo)
 
-        layout.addLayout(header)
-        layout.addWidget(self._separador())
+        contenido_layout.addLayout(header)
+        contenido_layout.addWidget(self._separador())
 
-        # ---------- Contenido ----------
+        # ---------- Formulario ----------
         cont = QVBoxLayout()
         cont.setContentsMargins(18, 14, 18, 18)
         cont.setSpacing(6)
@@ -104,11 +130,10 @@ class DialogoRegistro(QDialog):
         self.input_confirm = self._input("Repite la contraseña", password=True)
         cont.addWidget(self.input_confirm)
 
-        layout.addLayout(cont)
-        layout.addWidget(self._separador())
+        contenido_layout.addLayout(cont)
+        contenido_layout.addWidget(self._separador())
 
-        # ---------- Footer botones ----------
-                # ---------- Footer botones ----------
+        # ---------- Botón principal ----------
         footer = QHBoxLayout()
         footer.setContentsMargins(18, 10, 18, 12)
         footer.addStretch()
@@ -135,7 +160,7 @@ class DialogoRegistro(QDialog):
         footer.addWidget(btn_guardar)
 
         footer.addStretch()
-        layout.addLayout(footer)
+        contenido_layout.addLayout(footer)
 
         # ---------- Link "¿Ya tienes una cuenta?" ----------
         footer_login = QHBoxLayout()
@@ -174,7 +199,9 @@ class DialogoRegistro(QDialog):
         footer_login.addWidget(btn_ir_login)
 
         footer_login.addStretch()
-        layout.addLayout(footer_login)
+        contenido_layout.addLayout(footer_login)
+
+        root.addWidget(contenido)
 
         # ---------- Atajos ----------
         self.input_nombre.returnPressed.connect(lambda: self.input_apellido.setFocus())
@@ -183,37 +210,6 @@ class DialogoRegistro(QDialog):
         self.input_password.returnPressed.connect(lambda: self.input_confirm.setFocus())
         self.input_confirm.returnPressed.connect(self._on_guardar)
         self.input_nombre.setFocus()
-
-    # ============================================================
-    # Logo
-    # ============================================================
-    def _crear_logo(self):
-        """Devuelve un QLabel con el logo o None si no se encuentra."""
-        base_dir = os.path.dirname(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        )
-        ruta_logo = os.path.join(base_dir, "assets", "logo-mg.png")
-        pixmap = QPixmap(ruta_logo)
-
-        if pixmap.isNull():
-            return None
-
-        dpr = self.devicePixelRatioF()
-        pixmap = pixmap.scaled(
-            int(LOGO_MAX_W * dpr),
-            int(LOGO_MAX_H * dpr),
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
-        )
-        pixmap.setDevicePixelRatio(dpr)
-
-        label_logo = QLabel()
-        label_logo.setPixmap(pixmap)
-        label_logo.setAlignment(Qt.AlignCenter)
-        label_logo.setStyleSheet(
-            "background: transparent; border: none; padding: 0;"
-        )
-        return label_logo
 
     # ============================================================
     # Helpers

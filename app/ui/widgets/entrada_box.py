@@ -29,7 +29,7 @@ class EntradaBox(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("EntradaBox")
-        self.setFixedHeight(52)          # ⬅️ antes 68
+        self.setFixedHeight(52)         
         self.setStyleSheet(f"""
             #EntradaBox {{
                 background-color: {COLOR_INPUT_BG};

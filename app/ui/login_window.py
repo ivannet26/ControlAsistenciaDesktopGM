@@ -89,7 +89,10 @@ class LoginWindow(QWidget):
         self._password_visible = False
 
         self.setWindowTitle("Control de Asistencia - Iniciar sesión")
-        self.setStyleSheet(f"background-color: {L.LOGIN_BG_RIGHT};")
+        self.setWindowFlag(Qt.FramelessWindowHint)
+        # ✅ Elimina el borde fantasma de Windows
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        # ❌ NO aplicar setStyleSheet aquí: taparía la barra blanca
 
         self._armar_ui()
         self._cargar_credenciales_guardadas()
@@ -100,15 +103,37 @@ class LoginWindow(QWidget):
         self.layout().activate()
         self.adjustSize()
         self.setFixedSize(self.size())
-        # Una vez fijado el tamaño, posicionar el botón del ojo
         QTimer.singleShot(0, self._posicionar_boton_ojo)
 
     # -------------------- UI --------------------
     def _armar_ui(self):
+        from app.ui.custom_title_bar import CustomTitleBar
+
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 24, 24, 24)
+        root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-        root.addWidget(self._construir_card())
+
+        # Barra personalizada (blanca, sin bordes fantasma)
+        self.title_bar = CustomTitleBar(
+            self,
+            "Control de Asistencia",
+            mostrar_maximizar=False,
+        )
+        root.addWidget(self.title_bar)
+
+        # Contenedor con el fondo oscuro
+        contenido = QWidget()
+        contenido.setObjectName("contenidoLogin")
+        # ✅ Necesario para que el background-color del QSS se pinte
+        contenido.setAttribute(Qt.WA_StyledBackground, True)
+        contenido.setStyleSheet(
+            f"QWidget#contenidoLogin {{ background-color: {L.LOGIN_BG_RIGHT}; }}"
+        )
+        contenido_layout = QVBoxLayout(contenido)
+        contenido_layout.setContentsMargins(24, 24, 24, 24)
+        contenido_layout.setSpacing(0)
+        contenido_layout.addWidget(self._construir_card())
+        root.addWidget(contenido)
 
     def _construir_card(self) -> QFrame:
         card = QFrame()
@@ -161,7 +186,6 @@ class LoginWindow(QWidget):
         self.password_input.setEchoMode(QLineEdit.Password)
         self.password_input.setFixedHeight(40)
 
-        # Padding derecho para que el texto no quede bajo el botón del ojo
         qss_pass = L.QSS_INPUT + f"""
             QLineEdit {{
                 padding-right: 42px;
@@ -170,7 +194,7 @@ class LoginWindow(QWidget):
         self.password_input.setStyleSheet(qss_pass)
         self.password_input.installEventFilter(self)
 
-        # ---- Botón flotante del ojo (dentro del input) ----
+        # ---- Botón flotante del ojo ----
         self.btn_ver_pass = QToolButton(self.password_input)
         self.btn_ver_pass.setCursor(Qt.PointingHandCursor)
         self.btn_ver_pass.setIcon(self._crear_icono_ojo_icon(False))
@@ -295,7 +319,7 @@ class LoginWindow(QWidget):
         return layout
 
     # ============================================================
-    # Reposicionar el botón del ojo cuando cambia el tamaño del input
+    # Reposicionar el botón del ojo
     # ============================================================
     def eventFilter(self, obj, event):
         if obj is self.password_input and event.type() == QEvent.Resize:
@@ -303,7 +327,6 @@ class LoginWindow(QWidget):
         return super().eventFilter(obj, event)
 
     def _posicionar_boton_ojo(self):
-        """Coloca el botón del ojo a la derecha del input, centrado vertical."""
         if not hasattr(self, "btn_ver_pass"):
             return
         x = self.password_input.width() - self.btn_ver_pass.width() - 4
@@ -311,15 +334,9 @@ class LoginWindow(QWidget):
         self.btn_ver_pass.move(x, y)
 
     # ============================================================
-    # Icono del ojo (con estados normal/hover/pressed)
+    # Icono del ojo
     # ============================================================
     def _crear_icono_ojo_icon(self, abierto: bool) -> QIcon:
-        """
-        QIcon con estados:
-        - Normal: gris
-        - Active (hover): blanco
-        - Selected (pressed): azul acento
-        """
         gris = "#8ea0af"
         claro = "#ffffff"
         azul = "#2196f3"
@@ -352,21 +369,18 @@ class LoginWindow(QWidget):
         painter.setPen(pen)
         painter.setBrush(Qt.NoBrush)
 
-        # Contorno del ojo (almendra)
         path = QPainterPath()
         path.moveTo(2, size / 2)
         path.quadTo(size / 2, 2, size - 2, size / 2)
         path.quadTo(size / 2, size - 2, 2, size / 2)
         painter.drawPath(path)
 
-        # Pupila
         r = size / 6.5
         painter.setBrush(QBrush(QColor(color)))
         painter.drawEllipse(
             QRectF(size / 2 - r, size / 2 - r, r * 2, r * 2)
         )
 
-        # Línea diagonal si está cerrado
         if not abierto:
             pen2 = QPen(QColor(color))
             pen2.setWidthF(1.7)
@@ -378,7 +392,6 @@ class LoginWindow(QWidget):
         return pixmap
 
     def _toggle_password(self):
-        """Alterna entre mostrar y ocultar la contraseña."""
         self._password_visible = not self._password_visible
 
         if self._password_visible:
@@ -473,7 +486,6 @@ class LoginWindow(QWidget):
         self.worker_registro.start()
 
     def _volver_al_login(self):
-        """Trae el login al frente cuando el usuario pide ir a iniciar sesión."""
         self.show()
         self.raise_()
         self.activateWindow()
@@ -483,7 +495,6 @@ class LoginWindow(QWidget):
         self.boton_registrar.setEnabled(True)
         self.boton_registrar.setText("Registrarse")
 
-        # Pre-rellenar el login
         self.email_input.setText(email)
         self.password_input.setText(password)
         self.password_input.setFocus()

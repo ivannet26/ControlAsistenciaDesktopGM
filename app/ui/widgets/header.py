@@ -23,9 +23,9 @@ class HeaderWidget(QWidget):
     def __init__(self, nombre_usuario: str, parent=None):
         super().__init__(parent)
         self.nombre_usuario = nombre_usuario
-        # El header ocupa solo la altura que necesita (no se estira)
+        
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        self.setFixedHeight(52)  # <- altura del header (ajústala a gusto)
+        self.setFixedHeight(52)  
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)

@@ -1,5 +1,29 @@
+# Python
 __pycache__/
-*.pyc
-.env
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Entornos virtuales
 venv/
+env/
 .venv/
+
+# PyInstaller
+build/
+dist/
+*.spec.bak
+
+# Inno Setup
+Output/
+
+# IDE
+.vscode/
+.idea/
+
+# Variables de entorno (¡NO subir!)
+.env
+
+# Sistema
+.DS_Store
+Thumbs.db

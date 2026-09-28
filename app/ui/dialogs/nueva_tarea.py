@@ -2,7 +2,7 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QFrame,
+    QPushButton, QFrame, QWidget,
 )
 
 from app.styles.colors import (
@@ -19,23 +19,26 @@ ALTO_BOTON = 32
 
 
 class DialogoNuevaTarea(QDialog):
-    """Diálogo compacto para crear una tarea."""
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Crear Tarea")
         self.setModal(True)
-        self.setStyleSheet(f"""
-            QDialog {{ background-color: {COLOR_PANEL}; }}
-        """)
+
+        self.setWindowFlag(Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
 
         self._armar_ui()
         self._ajustar_altura()
 
-    # ============================================================
     def showEvent(self, event):
         super().showEvent(event)
         self._ajustar_altura()
+        if self.parent():
+            p_geo = self.parent().geometry()
+            self.move(
+                p_geo.center().x() - self.width() // 2,
+                p_geo.center().y() - self.height() // 2,
+            )
 
     def _ajustar_altura(self):
         self.layout().invalidate()
@@ -45,48 +48,39 @@ class DialogoNuevaTarea(QDialog):
             alto = 150
         self.setFixedSize(ANCHO_DIALOGO, alto)
 
-    # ============================================================
-    # UI
-    # ============================================================
     def _armar_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        from app.ui.custom_title_bar import CustomTitleBar
 
-        # ---------- Header (solo título, sin ✕ custom) ----------
-        header = QHBoxLayout()
-        header.setContentsMargins(18, 16, 18, 14)
-        header.setSpacing(6)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        titulo = QLabel("Crear Tarea")
-        titulo.setStyleSheet(f"""
-            color: {COLOR_TEXTO};
-            font-size: 15px;
-            font-weight: 600;
-            background: transparent;
-            border: none;
-        """)
-        header.addWidget(titulo)
-        header.addStretch()
+        self.title_bar = CustomTitleBar(
+            self, "Crear Tarea",
+            mostrar_maximizar=False,
+            mostrar_minimizar=False,
+        )
+        root.addWidget(self.title_bar)
 
-        layout.addLayout(header)
+        contenido = QWidget()
+        contenido.setObjectName("contenidoDialogo")
+        contenido.setAttribute(Qt.WA_StyledBackground, True)
+        contenido.setStyleSheet(
+            f"QWidget#contenidoDialogo {{ background-color: {COLOR_PANEL}; }}"
+        )
+        contenido_layout = QVBoxLayout(contenido)
+        contenido_layout.setContentsMargins(0, 0, 0, 0)
+        contenido_layout.setSpacing(0)
 
-        # Separador
-        layout.addWidget(self._separador())
-
-        # ---------- Contenido ----------
-        contenido = QVBoxLayout()
-        contenido.setContentsMargins(18, 14, 18, 18)
-        contenido.setSpacing(6)
+        cont = QVBoxLayout()
+        cont.setContentsMargins(18, 14, 18, 18)
+        cont.setSpacing(6)
 
         label = QLabel("Nombre de la tarea")
-        label.setStyleSheet(f"""
-            color: {COLOR_TEXTO_SECUNDARIO};
-            font-size: 11px;
-            border: none;
-            background: transparent;
-        """)
-        contenido.addWidget(label)
+        label.setStyleSheet(
+            f"color: {COLOR_TEXTO_SECUNDARIO}; font-size: 11px; border: none; background: transparent;"
+        )
+        cont.addWidget(label)
 
         self.input_titulo = QLineEdit()
         self.input_titulo.setPlaceholderText("Nombre de la tarea")
@@ -97,19 +91,15 @@ class DialogoNuevaTarea(QDialog):
                 border: 1px solid {COLOR_BORDE_INPUT};
                 border-radius: {RADIO_INPUT}px;
                 color: {COLOR_TEXTO};
-                padding: 4px 10px;
-                font-size: 12px;
+                padding: 4px 10px; font-size: 12px;
             }}
             QLineEdit:focus {{ border: 1px solid {COLOR_ACENTO}; }}
             QLineEdit::placeholder {{ color: {COLOR_TEXTO_TERCIARIO}; }}
         """)
-        contenido.addWidget(self.input_titulo)
-        layout.addLayout(contenido)
+        cont.addWidget(self.input_titulo)
+        contenido_layout.addLayout(cont)
+        contenido_layout.addWidget(self._separador())
 
-        # Separador
-        layout.addWidget(self._separador())
-
-        # ---------- Footer ----------
         footer = QHBoxLayout()
         footer.setContentsMargins(18, 10, 18, 14)
         footer.setSpacing(6)
@@ -121,12 +111,9 @@ class DialogoNuevaTarea(QDialog):
         btn_cancelar.clicked.connect(self.reject)
         btn_cancelar.setStyleSheet(f"""
             QPushButton {{
-                background: transparent;
-                border: none;
-                color: {COLOR_ACENTO};
-                padding: 0 10px;
-                font-size: 12px;
-                font-weight: 600;
+                background: transparent; border: none;
+                color: {COLOR_ACENTO}; padding: 0 10px;
+                font-size: 12px; font-weight: 600;
             }}
             QPushButton:hover {{ color: {COLOR_ACENTO_HOVER}; }}
         """)
@@ -138,28 +125,23 @@ class DialogoNuevaTarea(QDialog):
         btn_guardar.setStyleSheet(f"""
             QPushButton {{
                 background-color: {COLOR_ACENTO};
-                color: white;
-                border: none;
+                color: white; border: none;
                 border-radius: {RADIO_BOTON}px;
                 padding: 0 18px;
-                font-size: 11px;
-                font-weight: 700;
-                letter-spacing: 0.5px;
-                min-width: 90px;
+                font-size: 11px; font-weight: 700;
+                letter-spacing: 0.5px; min-width: 90px;
             }}
             QPushButton:hover    {{ background-color: {COLOR_ACENTO_HOVER}; }}
             QPushButton:pressed  {{ background-color: {COLOR_ACENTO_PRESSED}; }}
         """)
         btn_guardar.clicked.connect(self._on_guardar)
         footer.addWidget(btn_guardar)
+        contenido_layout.addLayout(footer)
+        root.addWidget(contenido)
 
-        layout.addLayout(footer)
-
-        # Enter en el input = guardar
         self.input_titulo.returnPressed.connect(self._on_guardar)
         self.input_titulo.setFocus()
 
-    # ============================================================
     def _separador(self):
         linea = QFrame()
         linea.setFrameShape(QFrame.HLine)
@@ -172,6 +154,5 @@ class DialogoNuevaTarea(QDialog):
             return
         self.accept()
 
-    def datos(self) -> tuple[str, str]:
-        """Compatibilidad: (título, prioridad). Prioridad siempre MEDIA."""
+    def datos(self):
         return (self.input_titulo.text().strip(), "MEDIA")
