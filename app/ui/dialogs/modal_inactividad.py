@@ -1,20 +1,18 @@
-# app/ui/dialogs/modal_inactividad.py
-"""
-Modal que aparece cuando el usuario ha estado inactivo.
-Pregunta qué hacer con el tiempo de inactividad.
-"""
 
 import time
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QButtonGroup, QFrame, QRadioButton
+    QPushButton, QButtonGroup, QFrame, QRadioButton,
 )
 
-from .estilos import (
-    COLOR_FONDO, COLOR_BORDE, COLOR_ACENTO, COLOR_ACENTO_HOVER,
-    COLOR_TEXTO, COLOR_TEXTO_SECUNDARIO,
+# ⬇️ Colores desde la paleta unificada
+from app.styles.colors import (
+    COLOR_FONDO, COLOR_PANEL, COLOR_BORDE, COLOR_BORDE_INPUT,
+    COLOR_INPUT_BG, COLOR_TEXTO, COLOR_TEXTO_SECUNDARIO,
+    COLOR_ACENTO, COLOR_ACENTO_HOVER, COLOR_ACENTO_PRESSED,
+    RADIO_INPUT, RADIO_BOTON, RADIO_CARD,
 )
 
 
@@ -49,7 +47,7 @@ class ModalInactividad(QDialog):
 
         self.setStyleSheet(f"""
             QDialog {{
-                background-color: {COLOR_FONDO};
+                background-color: {COLOR_PANEL};
                 color: {COLOR_TEXTO};
             }}
         """)
@@ -70,7 +68,7 @@ class ModalInactividad(QDialog):
 
     def _armar_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setContentsMargins(28, 26, 28, 26)
         layout.setSpacing(16)
 
         # -------- TÍTULO --------
@@ -78,8 +76,9 @@ class ModalInactividad(QDialog):
         titulo.setStyleSheet(f"""
             QLabel {{
                 color: {COLOR_TEXTO};
-                font-size: 17px;
+                font-size: 18px;
                 font-weight: 600;
+                border: none;
             }}
         """)
         layout.addWidget(titulo)
@@ -95,25 +94,24 @@ class ModalInactividad(QDialog):
             QLabel {{
                 color: {COLOR_TEXTO_SECUNDARIO};
                 font-size: 13px;
-                line-height: 1.4;
+                border: none;
             }}
         """)
         layout.addWidget(descripcion)
 
-        # -------- CONTADOR EN VIVO (compacto) --------
+        # -------- CONTADOR EN VIVO --------
         contador_widget = QFrame()
         contador_widget.setStyleSheet(f"""
             QFrame {{
-                background-color: #101b22;
-                border: 1px solid {COLOR_BORDE};
-                border-radius: 4px;
+                background-color: {COLOR_INPUT_BG};
+                border: 1px solid {COLOR_BORDE_INPUT};
+                border-radius: {RADIO_INPUT}px;
             }}
         """)
         contador_layout = QHBoxLayout(contador_widget)
-        contador_layout.setContentsMargins(14, 10, 14, 10)
+        contador_layout.setContentsMargins(16, 12, 16, 12)
         contador_layout.setSpacing(12)
 
-        # Etiqueta izquierda
         label_titulo = QLabel("Tiempo inactivo:")
         label_titulo.setStyleSheet(f"""
             QLabel {{
@@ -125,7 +123,6 @@ class ModalInactividad(QDialog):
         """)
         contador_layout.addWidget(label_titulo)
 
-        # Contador (tamaño medio)
         self.label_contador = QLabel("00:00:00")
         self.label_contador.setStyleSheet(f"""
             QLabel {{
@@ -141,7 +138,6 @@ class ModalInactividad(QDialog):
 
         contador_layout.addStretch()
 
-        # Desglose a la derecha
         self.label_desglose = QLabel("")
         self.label_desglose.setStyleSheet(f"""
             QLabel {{
@@ -161,28 +157,34 @@ class ModalInactividad(QDialog):
         # -------- OPCIÓN ÚNICA --------
         self.grupo = QButtonGroup(self)
 
+        qss_radio = f"""
+            QRadioButton {{
+                color: {COLOR_TEXTO};
+                font-size: 13px;
+                padding: 4px 0;
+                spacing: 10px;
+                border: none;
+            }}
+            QRadioButton::indicator {{
+                width: 16px;
+                height: 16px;
+                border-radius: 9px;
+                border: 2px solid {COLOR_BORDE_INPUT};
+                background-color: transparent;
+            }}
+            QRadioButton::indicator:hover {{
+                border: 2px solid {COLOR_ACENTO};
+            }}
+            QRadioButton::indicator:checked {{
+                border: 2px solid {COLOR_ACENTO};
+                background-color: {COLOR_ACENTO};
+            }}
+        """
+
         radio_descartar = QRadioButton("Descartar tiempo de inactividad")
         radio_descartar.setProperty("valor", "descartar")
         radio_descartar.setChecked(True)
-        radio_descartar.setStyleSheet(f"""
-      QRadioButton {{
-        color: {COLOR_TEXTO};
-        font-size: 13px;
-        padding: 4px 0;
-        spacing: 10px;
-      }}
-      QRadioButton::indicator {{
-        width: 15px;
-        height: 15px;
-        border-radius: 8px;
-        border: 2px solid {COLOR_TEXTO_SECUNDARIO};
-        background-color: transparent;
-      }}
-      QRadioButton::indicator:checked {{
-        border: 2px solid {COLOR_ACENTO};
-        background-color: {COLOR_ACENTO};
-      }}
-        """)
+        radio_descartar.setStyleSheet(qss_radio)
         self.grupo.addButton(radio_descartar)
         layout.addWidget(radio_descartar)
 
@@ -198,25 +200,7 @@ class ModalInactividad(QDialog):
         # for valor, texto in opciones:
         #     radio = QRadioButton(texto)
         #     radio.setProperty("valor", valor)
-        #     radio.setStyleSheet(f"""
-        #         QRadioButton {{
-        #             color: {COLOR_TEXTO};
-        #             font-size: 13px;
-        #             padding: 4px 0;
-        #             spacing: 10px;
-        #         }}
-        #         QRadioButton::indicator {{
-        #             width: 15px;
-        #             height: 15px;
-        #             border-radius: 8px;
-        #             border: 2px solid {COLOR_TEXTO_SECUNDARIO};
-        #             background-color: transparent;
-        #         }}
-        #         QRadioButton::indicator:checked {{
-        #             border: 2px solid {COLOR_ACENTO};
-        #             background-color: {COLOR_ACENTO};
-        #         }}
-        #     """)
+        #     radio.setStyleSheet(qss_radio)
         #     self.grupo.addButton(radio)
         #     layout.addWidget(radio)
 
@@ -239,14 +223,17 @@ class ModalInactividad(QDialog):
                 background-color: {COLOR_ACENTO};
                 color: white;
                 border: none;
-                padding: 9px 24px;
+                padding: 10px 26px;
                 font-size: 13px;
                 font-weight: 600;
-                border-radius: 3px;
-                min-width: 110px;
+                border-radius: {RADIO_BOTON}px;
+                min-width: 120px;
             }}
             QPushButton:hover {{
                 background-color: {COLOR_ACENTO_HOVER};
+            }}
+            QPushButton:pressed {{
+                background-color: {COLOR_ACENTO_PRESSED};
             }}
         """)
         fila_boton.addWidget(self.btn_continuar)

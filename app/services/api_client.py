@@ -1,3 +1,4 @@
+# app/services/api_client.py
 import os
 
 import requests
@@ -32,7 +33,12 @@ class ApiClient:
     def _request(self, method: str, path: str, **kwargs):
         url = f"{self.base_url}{path}"
         try:
-            resp = requests.request(method, url, headers=self._headers(), timeout=15, **kwargs)
+            resp = requests.request(
+                method, url,
+                headers=self._headers(),
+                timeout=60,          
+                **kwargs,
+            )
         except requests.exceptions.RequestException as e:
             raise ApiError(f"No se pudo conectar con el servidor: {e}")
 
@@ -65,11 +71,35 @@ class ApiClient:
         params = {"estado": estado} if estado else {}
         return self._request("GET", "/proyectos", params=params)
 
+    def crear_proyecto(
+        self,
+        nombre: str,
+        descripcion: str | None = None,
+        cliente_id: int | None = None,
+        color: str | None = "#10a878",
+    ):
+        """POST /proyectos"""
+        body = {
+            "nombre": nombre,
+            "descripcion": descripcion,
+            "cliente_id": cliente_id,
+            "estado": "ACTIVO",
+            "color": color,
+        }
+        return self._request("POST", "/proyectos", json=body)
+
     # ---------------- etiquetas ----------------
     def listar_etiquetas(self, estado: str = "activo"):
         """GET /etiquetas?estado=activo|archivado|todo"""
         params = {"estado": estado}
         return self._request("GET", "/etiquetas", params=params)
+
+    def crear_etiqueta(self, nombre: str, color: str = "#10a5f5"):
+        body = {
+            "nombre": nombre,
+            "color": color,
+        }
+        return self._request("POST", "/etiquetas", json=body)
 
     # ---------------- rastreador: temporizador ----------------
     def obtener_temporizador_activo(self):
@@ -114,9 +144,37 @@ class ApiClient:
     def resumen(self):
         return self._request("GET", "/rastreador/resumen")
 
+    def ajustar_tiempo(self, registro_id: int, segundos_descontar: int):
+        """Descuenta segundos de un registro activo (por inactividad)."""
+        return self._request(
+            "POST",
+            "/rastreador/tiempo/ajustar",
+            params={
+                "registro_id": registro_id,
+                "segundos_descontar": segundos_descontar,
+            },
+        )
+
     # ---------------- rastreador: tareas ----------------
     def listar_tareas(self, proyecto_id: int):
         return self._request("GET", "/rastreador/tareas", params={"proyecto_id": proyecto_id})
+
+    def crear_tarea(
+        self,
+        titulo: str,
+        proyecto_id: int,
+        estado: str = "PENDIENTE",
+        prioridad: str = "MEDIA",
+    ):
+        body = {
+            "titulo": titulo,
+            "proyecto_id": proyecto_id,
+            "estado": estado,
+            "prioridad": prioridad,
+            "horas": 0.0,
+            "etiqueta_ids": [],
+        }
+        return self._request("POST", "/rastreador/tareas", json=body)
 
     # ---------------- rastreador: entrada manual ----------------
     def crear_entrada_manual(
@@ -137,36 +195,13 @@ class ApiClient:
             "etiqueta_id": etiqueta_id,
         }
         return self._request("POST", "/rastreador/tiempo/manual", json=body)
-        # ---------------- crear tarea ----------------
-    def crear_tarea(self, titulo: str, proyecto_id: int,
-                    estado: str = "PENDIENTE",
-                    prioridad: str = "MEDIA"):
-        body = {
-            "titulo": titulo,
-            "proyecto_id": proyecto_id,
-            "estado": estado,
-            "prioridad": prioridad,
-            "horas": 0.0,
-            "etiqueta_ids": [],
-        }
-        return self._request("POST", "/rastreador/tareas", json=body)
-
-    # ---------------- crear etiqueta ----------------
-    def crear_etiqueta(self, nombre: str, color: str = "#10a5f5"):
+        # ---------------- auth: registro ----------------
+    def registrar(self, nombre: str, apellido: str, email: str, password: str):
+        """POST /auth/registro — crea una cuenta nueva."""
         body = {
             "nombre": nombre,
-            "color": color,
+            "apellido": apellido,
+            "email": email,
+            "password": password,
         }
-        return self._request("POST", "/etiquetas", json=body)
-    def ajustar_tiempo(self, registro_id: int, segundos_descontar: int):
-        """
-        Descuenta segundos de un registro activo (por inactividad).
-        """
-        return self._request(
-            "POST",
-            "/rastreador/tiempo/ajustar",
-             params={
-                "registro_id": registro_id,
-                "segundos_descontar": segundos_descontar,
-        },
-    )
+        return self._request("POST", "/auth/registro", json=body)

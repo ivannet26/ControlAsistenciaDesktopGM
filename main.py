@@ -1,3 +1,4 @@
+# main.py
 import sys
 
 from PySide6.QtWidgets import QApplication
@@ -11,17 +12,49 @@ def main():
     app = QApplication(sys.argv)
     client = ApiClient()
 
-    ventanas = {}
+    estado = {
+        "login": None,
+        "tracker": None,
+    }
 
+    # ------------------------------------------------------------
+    # Abrir tracker (desde login)
+    # ------------------------------------------------------------
     def abrir_tracker(usuario: dict):
-        login_win.close()
-        tracker_win = TrackerWindow(client, usuario)
-        ventanas["tracker"] = tracker_win
-        tracker_win.show()
+        if estado["login"]:
+            estado["login"].close()
+            estado["login"] = None
 
-    login_win = LoginWindow(client)
-    login_win.login_exitoso.connect(abrir_tracker)
-    login_win.show()
+        tracker = TrackerWindow(client, usuario)
+        tracker.cerrar_sesion.connect(volver_al_login)
+        estado["tracker"] = tracker
+        tracker.show()
+
+    # ------------------------------------------------------------
+    # Volver al login (desde tracker)
+    # ------------------------------------------------------------
+    def volver_al_login():
+        # Cerrar tracker si existe
+        if estado["tracker"]:
+            estado["tracker"].close()
+            estado["tracker"] = None
+
+        # Limpiar sesión del cliente
+        client.logout()
+
+        # Abrir login
+        login = LoginWindow(client)
+        login.login_exitoso.connect(abrir_tracker)
+        estado["login"] = login
+        login.show()
+
+    # ------------------------------------------------------------
+    # Arranque: mostrar login
+    # ------------------------------------------------------------
+    login_inicial = LoginWindow(client)
+    login_inicial.login_exitoso.connect(abrir_tracker)
+    estado["login"] = login_inicial
+    login_inicial.show()
 
     sys.exit(app.exec())
 
