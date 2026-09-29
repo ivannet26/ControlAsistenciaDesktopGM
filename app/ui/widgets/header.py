@@ -3,7 +3,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction, QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QFrame, QLabel, QPushButton, QMenu,
-    QSizePolicy,
+    QSizePolicy, QWidgetAction,
 )
 
 from app.styles import tracker as S
@@ -16,16 +16,20 @@ COLOR_ORG = "#8ea0af"      # gris azulado, sobrio
 COLOR_TITULO = "#ffffff"
 COLOR_LINEA = "#2196f3"    # acento discreto
 
+VERSION_APP = "2.3.1"
+
 
 class HeaderWidget(QWidget):
     cerrar_sesion = Signal()
+    abrir_preferencias = Signal()   # 🆕 para comunicar al TrackerWindow
 
-    def __init__(self, nombre_usuario: str, parent=None):
+    def __init__(self, nombre_usuario: str, parent=None, email: str = ""):
         super().__init__(parent)
         self.nombre_usuario = nombre_usuario
-        
+        self.email_usuario = email or f"{nombre_usuario.lower().replace(' ', '.')}@gmail.com"
+
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        self.setFixedHeight(52)  
+        self.setFixedHeight(52)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
@@ -42,7 +46,7 @@ class HeaderWidget(QWidget):
         lay_titulo.setContentsMargins(0, 0, 0, 0)
         lay_titulo.setSpacing(2)
 
-        # Nombre de la organización (pequeño, espaciado, mayúsculas)
+        # Nombre de la organización
         label_org = QLabel(NOMBRE_ORGANIZACION)
         fuente_org = QFont("Segoe UI", 8, QFont.DemiBold)
         fuente_org.setLetterSpacing(QFont.AbsoluteSpacing, 2)
@@ -116,7 +120,7 @@ class HeaderWidget(QWidget):
             padding: 0; margin: 0;
         """)
 
-        # Nombre (recortado con "…" si es muy largo)
+        # Nombre recortado
         fuente_nombre = QFont("Segoe UI", 9, QFont.DemiBold)
         fm = QFontMetrics(fuente_nombre)
         texto_nombre = fm.elidedText(nombre_usuario, Qt.ElideRight, 110)
@@ -136,13 +140,14 @@ class HeaderWidget(QWidget):
             w.setAttribute(Qt.WA_TransparentForMouseEvents)
             lay_u.addWidget(w, alignment=Qt.AlignVCenter)
 
-        # El botón no calcula el ancho a partir de su layout: se fija a mano
         ancho = 5 + 22 + 6 + fm.horizontalAdvance(texto_nombre) + 6 + 10 + 8 + 4
         self.btn_usuario.setFixedWidth(ancho)
 
         self.btn_usuario.clicked.connect(self._abrir_menu)
         layout.addWidget(self.btn_usuario, alignment=Qt.AlignVCenter)
 
+    # ============================================================
+    # ABRIR MENÚ
     # ============================================================
     def _abrir_menu(self):
         menu = QMenu(self)
@@ -151,17 +156,19 @@ class HeaderWidget(QWidget):
                 background-color: #16232c;
                 border: 1px solid #22323d;
                 color: #ffffff;
-                padding: 4px;
-                border-radius: 6px;
+                padding: 6px;
+                border-radius: 8px;
+                min-width: 240px;
             }
             QMenu::item {
-                padding: 7px 18px;
-                font-size: 11px;
-                border-radius: 4px;
+                padding: 9px 22px 9px 40px;
+                font-size: 12px;
+                border-radius: 6px;
+                margin: 1px 2px;
             }
             QMenu::item:selected {
-                background-color: #2196f3;
-                color: white;
+                background-color: rgba(33, 150, 243, 0.18);
+                color: #ffffff;
             }
             QMenu::item:disabled {
                 color: #8ea0af;
@@ -170,27 +177,159 @@ class HeaderWidget(QWidget):
             QMenu::separator {
                 height: 1px;
                 background: #22323d;
-                margin: 5px 8px;
+                margin: 6px 12px;
+            }
+            QMenu::icon {
+                padding-left: 14px;
             }
         """)
 
-        # Encabezado informativo (no clicable)
-        acc_info = QAction(f"Sesión: {self.nombre_usuario}", self)
-        acc_info.setEnabled(False)
-        menu.addAction(acc_info)
+        # ---- Cabecera: avatar grande + nombre + email ----
+        header_widget = self._crear_header_menu()
+        wa_header = QWidgetAction(menu)
+        wa_header.setDefaultWidget(header_widget)
+        menu.addAction(wa_header)
         menu.addSeparator()
 
-        acc_cambiar = QAction("Cambiar de cuenta", self)
-        acc_cambiar.triggered.connect(self.cerrar_sesion.emit)
-        menu.addAction(acc_cambiar)
+        # ---- Workspace ----
+        acc_ws = QAction("  🏢   SistemasGM", self)
+        acc_ws.triggered.connect(lambda: print("[Menú] Workspace"))
+        menu.addAction(acc_ws)
 
-        acc_salir = QAction("Cerrar sesión", self)
-        acc_salir.triggered.connect(self.cerrar_sesion.emit)
+        menu.addSeparator()
+
+        # ---- Opciones rápidas ----
+        acc_actualizar = QAction("  🔄   Actualizar", self)
+        acc_actualizar.triggered.connect(self._on_actualizar)
+        menu.addAction(acc_actualizar)
+
+        acc_mini = QAction("  ⛶   Usar mini temporizador", self)
+        acc_mini.triggered.connect(lambda: print("[Menú] Mini temporizador"))
+        menu.addAction(acc_mini)
+
+        acc_auto = QAction("  ⏱   Rastreador automático", self)
+        acc_auto.triggered.connect(lambda: print("[Menú] Rastreador automático"))
+        menu.addAction(acc_auto)
+
+        acc_pref = QAction("  ⚙   Preferencias", self)
+        acc_pref.triggered.connect(self._abrir_preferencias)
+        menu.addAction(acc_pref)
+
+        menu.addSeparator()
+
+        # ---- Informes y ayuda ----
+        acc_info = QAction("  📊   Informes", self)
+        acc_info.triggered.connect(lambda: print("[Menú] Informes"))
+        menu.addAction(acc_info)
+
+        acc_ayuda = QAction("  ❓   Ayuda de GM", self)
+        acc_ayuda.triggered.connect(lambda: print("[Menú] Ayuda"))
+        menu.addAction(acc_ayuda)
+
+        menu.addSeparator()
+
+        # ---- Versión + feedback ----
+        acc_version = QAction(f"  ℹ   Versión de aplicación          {VERSION_APP}", self)
+        acc_version.setEnabled(False)
+        menu.addAction(acc_version)
+
+        acc_feedback = QAction("  💬   Compartir feedback", self)
+        acc_feedback.triggered.connect(lambda: print("[Menú] Feedback"))
+        menu.addAction(acc_feedback)
+
+        # ---- Cerrar sesión ----
+        acc_cerrar = QAction("  →   Cerrar sesión", self)
+        acc_cerrar.triggered.connect(self.cerrar_sesion.emit)
+        menu.addAction(acc_cerrar)
+
+        menu.addSeparator()
+
+        # ---- Salir ----
+        acc_salir = QAction("  ✕   Salir", self)
+        acc_salir.triggered.connect(self._salir_app)
         menu.addAction(acc_salir)
 
-        # Alinear el borde derecho del menú con el del botón, justo debajo
+        # Posicionar el menú alineado a la derecha
         ancho_menu = menu.sizeHint().width()
         pos = self.btn_usuario.mapToGlobal(self.btn_usuario.rect().bottomRight())
         pos.setX(pos.x() - ancho_menu)
         pos.setY(pos.y() + 6)
         menu.exec(pos)
+
+    # ============================================================
+    # HEADER DEL MENÚ (avatar grande + nombre + email)
+    # ============================================================
+    def _crear_header_menu(self) -> QWidget:
+        w = QWidget()
+        w.setFixedHeight(64)
+        w.setStyleSheet("background: transparent;")
+
+        layout = QHBoxLayout(w)
+        layout.setContentsMargins(14, 8, 14, 8)
+        layout.setSpacing(12)
+
+        # Avatar grande
+        inicial = (self.nombre_usuario.strip()[:1] or "?").upper()
+        avatar = QLabel(inicial)
+        avatar.setFixedSize(40, 40)
+        avatar.setAlignment(Qt.AlignCenter)
+        avatar.setStyleSheet(f"""
+            QLabel {{
+                background-color: rgba(33, 150, 243, 0.20);
+                color: {COLOR_LINEA};
+                border: 1px solid rgba(33, 150, 243, 0.40);
+                border-radius: 20px;
+                font-size: 17px;
+                font-weight: 700;
+            }}
+        """)
+        layout.addWidget(avatar)
+
+        # Nombre + email
+        col = QVBoxLayout()
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(2)
+
+        lbl_nombre = QLabel(self.nombre_usuario or "Usuario")
+        lbl_nombre.setStyleSheet(
+            "color: #ffffff; font-size: 13px; font-weight: 700; "
+            "background: transparent; border: none;"
+        )
+        col.addWidget(lbl_nombre)
+
+        lbl_email = QLabel(self.email_usuario)
+        lbl_email.setStyleSheet(
+            "color: #8ea0af; font-size: 11px; "
+            "background: transparent; border: none;"
+        )
+        col.addWidget(lbl_email)
+
+        layout.addLayout(col)
+        layout.addStretch()
+
+        return w
+
+    # ============================================================
+    # ACCIONES DEL MENÚ
+    # ============================================================
+    def _abrir_preferencias(self):
+        """Abre el diálogo de preferencias."""
+        from app.ui.dialogs.preferencias import DialogoPreferencias
+        dlg = DialogoPreferencias(self.window())
+        dlg.exec()
+
+    def _on_actualizar(self):
+        """Recarga los datos del tracker (historial, proyectos, etc.)."""
+        # Buscamos la TrackerWindow padre y llamamos a su método
+        ventana = self.window()
+        if hasattr(ventana, "_cargar_historial"):
+            ventana._cargar_historial()
+        if hasattr(ventana, "_refrescar_cache"):
+            ventana._refrescar_cache()
+
+    # ============================================================
+    # SALIR DE LA APP
+    # ============================================================
+    def _salir_app(self):
+        from PySide6.QtWidgets import QApplication
+        QApplication.quit()
