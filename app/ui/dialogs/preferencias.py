@@ -7,6 +7,8 @@ from PySide6.QtWidgets import (
     QSizePolicy, QButtonGroup, QStackedWidget,
 )
 
+from app.utils import autostart
+from app.utils import preferencias_store as PS
 from app.styles.colors import (
     COLOR_FONDO, COLOR_PANEL, COLOR_BORDE, COLOR_BORDE_INPUT,
     COLOR_INPUT_BG, COLOR_TEXTO, COLOR_TEXTO_SECUNDARIO, COLOR_TEXTO_TERCIARIO,
@@ -240,24 +242,41 @@ class DialogoPreferencias(QDialog):
             f"background-color: {COLOR_FONDO}; border: none;"
         )
         layout = QVBoxLayout(contenido)
-        layout.setContentsMargins(20, 14, 20, 14)   # ⬅️ antes (24, 20, 24, 20)
+        layout.setContentsMargins(20, 14, 20, 14)   
         layout.setSpacing(0)
 
         # ---- Título ----
         layout.addWidget(self._titulo_grande("Configuración general"))
-        layout.addSpacing(12)   # ⬅️ antes 18
+        layout.addSpacing(12)   
 
         # ---- Configuración ----
+                # ---- Configuración ----
         layout.addWidget(self._subtitulo("Configuración"))
         layout.addSpacing(4)
+
         layout.addWidget(FilaAjuste(
             "Mantener la aplicación siempre visible",
             ToggleSwitch(),
         ))
+
+        # 🆕 Auto-inicio: el registro de Windows es la fuente de verdad
+        self.toggle_autostart = ToggleSwitch()
+        self.toggle_autostart.setChecked(autostart.esta_habilitado())
+        self.toggle_autostart.toggled.connect(self._on_autostart_cambiado)
         layout.addWidget(FilaAjuste(
             "Iniciar automáticamente al iniciar el ordenador",
-            ToggleSwitch(),
+            self.toggle_autostart,
         ))
+
+        # 🆕 Mostrar la app al arrancar con Windows
+        self.toggle_mostrar = ToggleSwitch()
+        self.toggle_mostrar.setChecked(PS.get_bool(PS.KEY_MOSTRAR_AL_INICIAR, True))
+        self.toggle_mostrar.toggled.connect(self._on_mostrar_al_iniciar_cambiado)
+        layout.addWidget(FilaAjuste(
+            "Mostrar la aplicación al iniciar",
+            self.toggle_mostrar,
+        ))
+
         layout.addWidget(FilaAjuste(
             "Forzar sin conexión",
             ToggleSwitch(),
@@ -446,6 +465,16 @@ class DialogoPreferencias(QDialog):
         layout.addStretch()
 
         return self._con_scroll(contenido)
+    def _on_autostart_cambiado(self, activo: bool):
+        ok = autostart.aplicar(activo)
+        if not ok:
+            self.toggle_autostart.blockSignals(True)
+            self.toggle_autostart.setChecked(not activo)
+            self.toggle_autostart.blockSignals(False)
+            print("[Prefs] No se pudo cambiar el auto-inicio")
+
+    def _on_mostrar_al_iniciar_cambiado(self, activo: bool):
+        PS.set_bool(PS.KEY_MOSTRAR_AL_INICIAR, activo)   
 
     # ============================================================
     # HELPERS
