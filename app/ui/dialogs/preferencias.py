@@ -264,7 +264,7 @@ class DialogoPreferencias(QDialog):
         self.toggle_autostart.setChecked(autostart.esta_habilitado())
         self.toggle_autostart.toggled.connect(self._on_autostart_cambiado)
         layout.addWidget(FilaAjuste(
-            "Iniciar automáticamente al iniciar el ordenador",
+            "Abrir la aplicación al encender la computadora",
             self.toggle_autostart,
         ))
 
@@ -273,7 +273,7 @@ class DialogoPreferencias(QDialog):
         self.toggle_mostrar.setChecked(PS.get_bool(PS.KEY_MOSTRAR_AL_INICIAR, True))
         self.toggle_mostrar.toggled.connect(self._on_mostrar_al_iniciar_cambiado)
         layout.addWidget(FilaAjuste(
-            "Mostrar la aplicación al iniciar",
+            "Mostrar la ventana automáticamente",
             self.toggle_mostrar,
         ))
 

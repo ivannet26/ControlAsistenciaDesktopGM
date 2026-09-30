@@ -1,10 +1,10 @@
 # app/ui/tracker_window.py
 from datetime import date, datetime, timedelta
-
+from app.utils import preferencias_store as PS
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QDialog,
-    QSizePolicy,
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
+    QDialog, QSizePolicy,
 )
 from app.styles.colors import RADIO_CHIP
 
@@ -28,6 +28,9 @@ from app.styles import tracker as S
 ANCHO_MAX_CHIP = 180
 MAX_CHARS_CHIP = 24
 
+# Heartbeat: consulta al servidor cada 5 s
+INTERVALO_HEARTBEAT_MS = 5000
+
 
 class TrackerWindow(QWidget):
     cerrar_sesion = Signal()
@@ -40,6 +43,11 @@ class TrackerWindow(QWidget):
         self.segundos_transcurridos = 0
         self._workers = []
         self._entrada_actual = None
+
+        # Estado del heartbeat / cierre
+        self._ocupado = False          # True mientras hay una acción local en curso
+        self._hb_en_curso = False      # evita consultas solapadas
+        self._cerrando_real = False    # True solo al cerrar sesión o "Salir"
 
         # Cache
         self._proyectos = []
@@ -70,6 +78,12 @@ class TrackerWindow(QWidget):
         self.monitor_inactividad = MonitorInactividad(umbral_segundos=300, padre=self)
         self.monitor_inactividad.inactividad_detectada.connect(self._on_inactividad_detectada)
         self.monitor_inactividad.actividad_reanudada.connect(self._on_actividad_reanudada)
+
+        # Heartbeat: detecta timers iniciados/detenidos desde la web.
+        # Arranca aquí (no en showEvent) para correr aunque la ventana esté oculta.
+        self.heartbeat = QTimer(self)
+        self.heartbeat.timeout.connect(self._heartbeat)
+        self.heartbeat.start(INTERVALO_HEARTBEAT_MS)
 
     # ================= UI =================
     def _armar_ui(self):
@@ -285,7 +299,12 @@ class TrackerWindow(QWidget):
         QTimer.singleShot(4000, lambda: self.label_mensaje.setVisible(False))
 
     # ================= CARGA DE DATOS =================
+    def _limpiar_workers(self):
+        """Quita de la lista los workers ya terminados (el heartbeat crea uno cada 5 s)."""
+        self._workers = [w for w in self._workers if not w.isFinished()]
+
     def _lanzar(self, funcion, on_exito, *args, **kwargs):
+        self._limpiar_workers()
         worker = ApiWorker(funcion, *args, **kwargs)
         worker.exito.connect(on_exito)
         worker.error.connect(self._on_error_worker)
@@ -293,6 +312,7 @@ class TrackerWindow(QWidget):
         worker.start()
 
     def _on_error_worker(self, mensaje: str):
+        self._ocupado = False
         self._mostrar_mensaje(mensaje, "error")
 
     # ================= CACHE =================
@@ -442,6 +462,7 @@ class TrackerWindow(QWidget):
             self._mostrar_mensaje("Selecciona un proyecto.", "error")
             return
 
+        self._ocupado = True   # el heartbeat no interfiere mientras se inicia
         self._lanzar(
             self.client.iniciar_temporizador,
             self._on_iniciado,
@@ -452,6 +473,7 @@ class TrackerWindow(QWidget):
         )
 
     def _on_iniciado(self, registro):
+        self._ocupado = False
         self.registro_activo = registro
         self.segundos_transcurridos = 0
         self.entrada_box.set_tiempo("00:00:00")
@@ -460,10 +482,13 @@ class TrackerWindow(QWidget):
         self.monitor_inactividad.iniciar()
 
     def _detener(self):
+        self._ocupado = True   # el heartbeat no interfiere mientras se detiene
         self.reloj.stop()
         self._lanzar(self.client.detener_temporizador, self._on_detenido)
 
     def _on_detenido(self, registro):
+        self._ocupado = False
+        self.reloj.stop()   # necesario cuando se detiene desde la web
         self.monitor_inactividad.detener()
         self.registro_activo = None
         self.segundos_transcurridos = 0
@@ -474,9 +499,51 @@ class TrackerWindow(QWidget):
         self._renderizar_preview()
         self._cargar_historial()
 
+    # ================= HEARTBEAT =================
+    def _heartbeat(self):
+        if self._ocupado or self._hb_en_curso or self._cerrando_real:
+            return
+        self._hb_en_curso = True
+        self._limpiar_workers()
+        worker = ApiWorker(self.client.obtener_temporizador_activo)
+        worker.exito.connect(self._on_heartbeat)
+        worker.error.connect(self._on_heartbeat_error)
+        self._workers.append(worker)
+        worker.start()
+
+    def _on_heartbeat_error(self, _mensaje):
+        # Sin red o servidor dormido: se reintenta en el próximo ciclo, sin avisos
+        self._hb_en_curso = False
+
+    def _on_heartbeat(self, registro):
+        self._hb_en_curso = False
+        if self._ocupado:
+            return
+
+        activo_id = self.registro_activo.get("id") if self.registro_activo else None
+
+        if registro and registro.get("id") != activo_id:
+            # Timer iniciado (o cambiado) desde la web
+            self._on_temporizador_activo(registro)
+            # Solo mostrar la ventana si el usuario lo permite
+            if PS.get_bool(PS.KEY_MOSTRAR_AL_INICIAR, True):
+                self._traer_al_frente()
+        elif not registro and self.registro_activo:
+            # Timer detenido desde la web
+            self._on_detenido(None)
+            self._mostrar_mensaje("Temporizador detenido desde la web.", "success")
+
+    def _traer_al_frente(self):
+        self.setWindowState(self.windowState() & ~Qt.WindowMinimized)
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+        QApplication.alert(self, 0)   # parpadea en la barra si Windows no da foco
+
     # ================= INACTIVIDAD =================
     def _on_inactividad_detectada(self, segundos_inactivo: int):
         import time
+        self._ocupado = True   # pausa el heartbeat mientras el modal está abierto
         self.reloj.stop()
         self._inicio_inactividad = self.monitor_inactividad.ultima_actividad
         minutos = max(1, int(round(segundos_inactivo / 60)))
@@ -496,6 +563,7 @@ class TrackerWindow(QWidget):
         segundos_totales = int(time.time() - self._inicio_inactividad)
 
         if self.registro_activo:
+            # _ocupado se libera en _on_tiempo_ajustado o en _on_error_worker
             self._lanzar(
                 self.client.ajustar_tiempo,
                 self._on_tiempo_ajustado,
@@ -503,9 +571,11 @@ class TrackerWindow(QWidget):
                 segundos_descontar=segundos_totales,
             )
         else:
+            self._ocupado = False
             self.reloj.start(1000)
 
     def _on_tiempo_ajustado(self, registro_actualizado):
+        self._ocupado = False
         if not registro_actualizado:
             return
         self.registro_activo = registro_actualizado
@@ -525,6 +595,15 @@ class TrackerWindow(QWidget):
 
     # ================= CIERRE =================
     def closeEvent(self, event):
+        # La X solo oculta: la app sigue en la bandeja con el heartbeat activo
+        if not self._cerrando_real:
+            event.ignore()
+            self.hide()
+            return
+
+        # Cierre real (cerrar sesión o "Salir" de la bandeja)
+        if hasattr(self, "heartbeat"):
+            self.heartbeat.stop()
         if hasattr(self, "monitor_inactividad"):
             self.monitor_inactividad.detener()
         if hasattr(self, "reloj"):
