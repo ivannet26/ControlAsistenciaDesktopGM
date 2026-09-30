@@ -27,6 +27,7 @@ LOGO_MAX_H = 36
 class LoginWorker(QThread):
     exito = Signal(dict)
     error = Signal(str)
+    error_credenciales = Signal(str)
 
     def __init__(self, client: ApiClient, email: str, password: str):
         super().__init__()
@@ -79,6 +80,9 @@ class RegistroWorker(QThread):
 # ============================================================
 class LoginWindow(QWidget):
     login_exitoso = Signal(dict)
+    auto_login_fallido = Signal()          
+    MAX_INTENTOS_AUTO = 5                  
+    ESPERA_REINTENTO_MS = 10_000     
 
     def __init__(self, client: ApiClient):
         super().__init__()
@@ -515,3 +519,48 @@ class LoginWindow(QWidget):
             titulo="Error al registrar",
             mensaje=mensaje,
         )
+        # -------------------- Auto-login --------------------
+    def auto_login_si_hay_credenciales(self) -> bool:
+        """True si inició un auto-login; False si no hay credenciales guardadas."""
+        email, password, recordar = cargar_credenciales()
+        if not (recordar and email and password):
+            return False
+
+        self._auto_intentos = 0
+        print(f"[Auto-login] Iniciando para {email}...")
+        self.boton_login.setEnabled(False)
+        self.boton_login.setText("Ingresando...")
+        self._auto_login_intentar()
+        return True
+
+    def _auto_login_intentar(self):
+        self._auto_intentos += 1
+        print(f"[Auto-login] Intento {self._auto_intentos}/{self.MAX_INTENTOS_AUTO}")
+
+        # Los campos ya fueron rellenados por _cargar_credenciales_guardadas()
+        self.worker = LoginWorker(
+            self.client,
+            self.email_input.text().strip(),
+            self.password_input.text(),
+        )
+        self.worker.exito.connect(self._on_login_ok)
+        self.worker.error.connect(self._on_auto_login_error_red)
+        self.worker.error_credenciales.connect(self._on_auto_login_error_credenciales)
+        self.worker.start()
+
+    def _on_auto_login_error_red(self, mensaje: str):
+        print(f"[Auto-login] Error de red/servidor: {mensaje}")
+        if self._auto_intentos < self.MAX_INTENTOS_AUTO:
+            QTimer.singleShot(self.ESPERA_REINTENTO_MS, self._auto_login_intentar)
+        else:
+            self._auto_login_abortar()
+
+    def _on_auto_login_error_credenciales(self, mensaje: str):
+        print(f"[Auto-login] Credenciales rechazadas: {mensaje}")
+        self._auto_login_abortar()
+
+    def _auto_login_abortar(self):
+        """Se rindió el auto-login: habilita el formulario y avisa a main.py."""
+        self.boton_login.setEnabled(True)
+        self.boton_login.setText("Ingresar")
+        self.auto_login_fallido.emit()

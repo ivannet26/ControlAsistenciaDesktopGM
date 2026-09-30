@@ -48,21 +48,18 @@ class TrackerWindow(QWidget):
 
         self.setWindowTitle(f"Control de Asistencia - {usuario.get('nombre', '')}")
         self.setWindowFlag(Qt.FramelessWindowHint)
+        # ✅ Elimina el borde fantasma de Windows
         self.setAttribute(Qt.WA_TranslucentBackground)
 
         self.resize(420, 600)
         self.setMinimumWidth(380)
         self.setMinimumHeight(480)
+        # ❌ NO aplicar setStyleSheet aquí
 
         self._armar_ui()
 
         self.reloj = QTimer(self)
         self.reloj.timeout.connect(self._tick)
-
-        # 🆕 Heartbeat SIEMPRE activo (bidireccional)
-        self.heartbeat = QTimer(self)
-        self.heartbeat.timeout.connect(self._verificar_timer_backend)
-        self.heartbeat.setInterval(5000)
 
         self._revisar_temporizador_activo()
         self._cargar_historial()
@@ -74,9 +71,6 @@ class TrackerWindow(QWidget):
         self.monitor_inactividad.inactividad_detectada.connect(self._on_inactividad_detectada)
         self.monitor_inactividad.actividad_reanudada.connect(self._on_actividad_reanudada)
 
-        # 🆕 Arrancar heartbeat INMEDIATAMENTE (siempre activo)
-        self.heartbeat.start()
-
     # ================= UI =================
     def _armar_ui(self):
         from app.ui.custom_title_bar import CustomTitleBar
@@ -85,6 +79,7 @@ class TrackerWindow(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
+        # Barra personalizada (blanca)
         self.title_bar = CustomTitleBar(
             self,
             f"Control de Asistencia - {self.usuario.get('nombre', '')}",
@@ -92,9 +87,11 @@ class TrackerWindow(QWidget):
         )
         layout.addWidget(self.title_bar)
 
+        # Contenedor con fondo oscuro del tracker
         contenido = QWidget()
         contenido.setObjectName("contenidoTracker")
         contenido.setAttribute(Qt.WA_StyledBackground, True)
+        # Extraer solo el background del QSS del tracker
         contenido.setStyleSheet(
             "QWidget#contenidoTracker { background-color: #0d181f; }"
         )
@@ -296,8 +293,7 @@ class TrackerWindow(QWidget):
         worker.start()
 
     def _on_error_worker(self, mensaje: str):
-        # 🔇 No mostrar errores del heartbeat (evita spam si hay problemas de red)
-        pass
+        self._mostrar_mensaje(mensaje, "error")
 
     # ================= CACHE =================
     def _precargar_proyectos(self):
@@ -469,7 +465,6 @@ class TrackerWindow(QWidget):
 
     def _on_detenido(self, registro):
         self.monitor_inactividad.detener()
-        self.reloj.stop()
         self.registro_activo = None
         self.segundos_transcurridos = 0
         self.entrada_box.set_tiempo("00:00:00")
@@ -478,83 +473,6 @@ class TrackerWindow(QWidget):
         self._entrada_actual = None
         self._renderizar_preview()
         self._cargar_historial()
-
-    # ================= HEARTBEAT (BIDIRECCIONAL) =================
-    def _verificar_timer_backend(self):
-        """Consulta al backend cada 5s para sincronizar el estado."""
-        self._lanzar(
-            self.client.obtener_temporizador_activo,
-            self._on_verificacion_backend,
-        )
-
-    def _on_verificacion_backend(self, registro):
-        """Sincroniza el estado entre el backend y la app (bidireccional)."""
-
-        # ─── Caso 1: NO hay timer en backend pero SÍ localmente → DETENER ───
-        if not registro and self.registro_activo:
-            self.reloj.stop()
-            self.monitor_inactividad.detener()
-
-            self.registro_activo = None
-            self.segundos_transcurridos = 0
-            self.entrada_box.set_tiempo("00:00:00")
-            self.entrada_box.set_estado(EntradaBox.ESTADO_VACIO)
-
-            self._entrada_actual = None
-            self._renderizar_preview()
-            self._cargar_historial()
-
-            self._mostrar_mensaje(
-                "El temporizador fue detenido en otro dispositivo.",
-                "success"
-            )
-            return
-
-        # ─── Caso 2: SÍ hay timer en backend pero NO localmente → INICIAR ───
-        if registro and not self.registro_activo:
-            self.registro_activo = registro
-
-            try:
-                inicio = datetime.fromisoformat(registro["inicio"])
-                ahora = (
-                    datetime.now(inicio.tzinfo)
-                    if inicio.tzinfo
-                    else datetime.now()
-                )
-                self.segundos_transcurridos = max(
-                    0, int((ahora - inicio).total_seconds())
-                )
-            except Exception as e:
-                print(f"Error parseando inicio: {e}")
-                self.segundos_transcurridos = 0
-
-            self._entrada_actual = {
-                "descripcion": registro.get("descripcion") or "",
-                "proyecto_id": registro.get("proyecto_id"),
-                "proyecto_nombre": registro.get("nombre_proyecto") or "",
-                "color_proyecto": registro.get("color_proyecto") or "#10a878",
-                "tarea_id": registro.get("tarea_id"),
-                "etiquetas": registro.get("etiquetas") or [],
-                "etiquetas_ids": [
-                    e["id"] for e in (registro.get("etiquetas") or [])
-                ],
-            }
-            self._renderizar_preview()
-
-            self.entrada_box.set_tiempo(
-                formatear_duracion(self.segundos_transcurridos)
-            )
-            self.entrada_box.set_estado(EntradaBox.ESTADO_CORRIENDO)
-            self.reloj.start(1000)
-            self.monitor_inactividad.iniciar()
-
-            self._mostrar_mensaje(
-                "Se detectó un temporizador activo en otro dispositivo.",
-                "success"
-            )
-            return
-
-        # ─── Caso 3: Ambos coinciden → no hacer nada ───
 
     # ================= INACTIVIDAD =================
     def _on_inactividad_detectada(self, segundos_inactivo: int):
@@ -611,8 +529,6 @@ class TrackerWindow(QWidget):
             self.monitor_inactividad.detener()
         if hasattr(self, "reloj"):
             self.reloj.stop()
-        if hasattr(self, "heartbeat"):
-            self.heartbeat.stop()
         for worker in self._workers:
             if worker.isRunning():
                 worker.quit()
