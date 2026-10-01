@@ -1,4 +1,3 @@
-# app/ui/widgets/header.py
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction, QFont, QFontMetrics
 from PySide6.QtWidgets import (
@@ -21,7 +20,7 @@ VERSION_APP = "2.3.1"
 
 class HeaderWidget(QWidget):
     cerrar_sesion = Signal()
-    abrir_preferencias = Signal()   # 🆕 para comunicar al TrackerWindow
+    abrir_preferencias = Signal()   # para comunicar al TrackerWindow
 
     def __init__(self, nombre_usuario: str, parent=None, email: str = ""):
         super().__init__(parent)
@@ -140,7 +139,8 @@ class HeaderWidget(QWidget):
             w.setAttribute(Qt.WA_TransparentForMouseEvents)
             lay_u.addWidget(w, alignment=Qt.AlignVCenter)
 
-        ancho = 5 + 22 + 6 + fm.horizontalAdvance(texto_nombre) + 6 + 10 + 8 + 4
+        # Ancho ajustado (si se corta la flecha o el nombre, suma +4 al final)
+        ancho = 5 + 22 + 6 + fm.horizontalAdvance(texto_nombre) + 6 + 10 + 8
         self.btn_usuario.setFixedWidth(ancho)
 
         self.btn_usuario.clicked.connect(self._abrir_menu)
@@ -158,10 +158,10 @@ class HeaderWidget(QWidget):
                 color: #ffffff;
                 padding: 6px;
                 border-radius: 8px;
-                min-width: 240px;
+                min-width: 200px;
             }
             QMenu::item {
-                padding: 9px 22px 9px 40px;
+                padding: 8px 18px;
                 font-size: 12px;
                 border-radius: 6px;
                 margin: 1px 2px;
@@ -179,9 +179,6 @@ class HeaderWidget(QWidget):
                 background: #22323d;
                 margin: 6px 12px;
             }
-            QMenu::icon {
-                padding-left: 14px;
-            }
         """)
 
         # ---- Cabecera: avatar grande + nombre + email ----
@@ -192,60 +189,60 @@ class HeaderWidget(QWidget):
         menu.addSeparator()
 
         # ---- Workspace ----
-        acc_ws = QAction("  🏢   SistemasGM", self)
+        acc_ws = QAction("SistemasGM", self)
         acc_ws.triggered.connect(lambda: print("[Menú] Workspace"))
         menu.addAction(acc_ws)
 
         menu.addSeparator()
 
         # ---- Opciones rápidas ----
-        acc_actualizar = QAction("  🔄   Actualizar", self)
+        acc_actualizar = QAction("Actualizar", self)
         acc_actualizar.triggered.connect(self._on_actualizar)
         menu.addAction(acc_actualizar)
 
-        acc_mini = QAction("  ⛶   Usar mini temporizador", self)
+        acc_mini = QAction("Usar mini temporizador", self)
         acc_mini.triggered.connect(lambda: print("[Menú] Mini temporizador"))
         menu.addAction(acc_mini)
 
-        acc_auto = QAction("  ⏱   Rastreador automático", self)
+        acc_auto = QAction("Rastreador automático", self)
         acc_auto.triggered.connect(lambda: print("[Menú] Rastreador automático"))
         menu.addAction(acc_auto)
 
-        acc_pref = QAction("  ⚙   Preferencias", self)
+        acc_pref = QAction("Preferencias", self)
         acc_pref.triggered.connect(self._abrir_preferencias)
         menu.addAction(acc_pref)
 
         menu.addSeparator()
 
         # ---- Informes y ayuda ----
-        acc_info = QAction("  📊   Informes", self)
+        acc_info = QAction("Informes", self)
         acc_info.triggered.connect(lambda: print("[Menú] Informes"))
         menu.addAction(acc_info)
 
-        acc_ayuda = QAction("  ❓   Ayuda de GM", self)
+        acc_ayuda = QAction("Ayuda de GM", self)
         acc_ayuda.triggered.connect(lambda: print("[Menú] Ayuda"))
         menu.addAction(acc_ayuda)
 
         menu.addSeparator()
 
         # ---- Versión + feedback ----
-        acc_version = QAction(f"  ℹ   Versión de aplicación          {VERSION_APP}", self)
+        acc_version = QAction(f"Versión de la aplicación: {VERSION_APP}", self)
         acc_version.setEnabled(False)
         menu.addAction(acc_version)
 
-        acc_feedback = QAction("  💬   Compartir feedback", self)
+        acc_feedback = QAction("Compartir feedback", self)
         acc_feedback.triggered.connect(lambda: print("[Menú] Feedback"))
         menu.addAction(acc_feedback)
 
         # ---- Cerrar sesión ----
-        acc_cerrar = QAction("  →   Cerrar sesión", self)
+        acc_cerrar = QAction("Cerrar sesión", self)
         acc_cerrar.triggered.connect(self.cerrar_sesion.emit)
         menu.addAction(acc_cerrar)
 
         menu.addSeparator()
 
         # ---- Salir ----
-        acc_salir = QAction("  ✕   Salir", self)
+        acc_salir = QAction("Salir", self)
         acc_salir.triggered.connect(self._salir_app)
         menu.addAction(acc_salir)
 

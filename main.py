@@ -130,6 +130,28 @@ def main():
             tracker.cerrar_sesion.connect(volver_al_login)
             estado["tracker"] = tracker
 
+            # --- Recordatorios: enlazar con la bandeja ---
+                        # --- Recordatorios: enlazar con la bandeja ---
+            tracker.recordatorios.set_tray(tray)
+
+            anterior = estado.get("handler_bandeja")
+            if anterior is not None:
+                try:
+                    tray.messageClicked.disconnect(anterior)
+                except (TypeError, RuntimeError):
+                    pass
+
+            estado["handler_bandeja"] = tracker._traer_al_frente
+            tray.messageClicked.connect(estado["handler_bandeja"])
+            # ----------------------------------------------
+            # Quitar la conexión de un tracker anterior (tras cerrar sesión)
+            try:
+                tray.messageClicked.disconnect()
+            except (TypeError, RuntimeError):
+                pass
+            tray.messageClicked.connect(tracker._traer_al_frente)
+            # ----------------------------------------------
+
             # Solo el primer arranque de Windows respeta "no mostrar"
             if estado["silencioso"]:
                 estado["silencioso"] = False
@@ -144,6 +166,7 @@ def main():
                 tracker.activateWindow()
         finally:
             estado["transicion"] = False
+        
 
     # ------------------------------------------------------------
     def volver_al_login():

@@ -1,11 +1,11 @@
-# app/ui/dialogs/preferencias.py
-from PySide6.QtCore import Qt, Signal, QSize
+from PySide6.QtCore import Qt, Signal, QSize, QTimer
 from PySide6.QtGui import QFont, QIcon, QPixmap, QPainter, QColor, QPen, QBrush
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QWidget, QFrame, QCheckBox, QComboBox, QScrollArea,
     QSizePolicy, QButtonGroup, QStackedWidget,
 )
+from app.ui.dialogs.panel_control_tiempo import PanelControlTiempo
 
 from app.utils import autostart
 from app.utils import preferencias_store as PS
@@ -127,13 +127,19 @@ class DialogoPreferencias(QDialog):
         self.setWindowFlag(Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
-        self.setMinimumSize(460, 540)
-        self.setMaximumSize(480, 620)
+                # La altura se adaptará automáticamente según la pestaña.
+        self.setMinimumSize(430, 420)
+        self.setMaximumSize(450, 760)
+        self.resize(440, 540)
 
         self._tab_buttons = []
         self._stack = None
 
         self._armar_ui()
+        QTimer.singleShot(
+            0,
+            lambda: self._ajustar_tamano_al_tab(0)
+        )
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -182,9 +188,10 @@ class DialogoPreferencias(QDialog):
         self._stack.setStyleSheet(
             f"QStackedWidget {{ background-color: {COLOR_FONDO}; border: none; }}"
         )
-
+        es_admin = getattr(self.parent(), "es_admin", False)
+        self.tab_control = PanelControlTiempo(es_admin=es_admin)
         self._stack.addWidget(self._tab_general())
-        self._stack.addWidget(self._tab_control_tiempo())
+        self._stack.addWidget(self.tab_control)  
         self._stack.addWidget(self._tab_rastreador_auto())
         self._stack.addWidget(self._tab_cuenta())
 
@@ -195,7 +202,7 @@ class DialogoPreferencias(QDialog):
     # ============================================================
     def _crear_tabs(self):
         w = QWidget()
-        w.setFixedHeight(40)   # ⬅️ antes 48
+        w.setFixedHeight(40)   
         w.setStyleSheet(
             f"background-color: {COLOR_HEADER_SEMANA}; border: none;"
         )
@@ -229,10 +236,81 @@ class DialogoPreferencias(QDialog):
 
     def _cambiar_tab(self, idx):
         self._stack.setCurrentIndex(idx)
+
         for i, btn in enumerate(self._tab_buttons):
             btn.setChecked(i == idx)
             btn._actualizar_estilo()
 
+        # Esperamos a que Qt actualice el layout de la nueva pestaña
+        QTimer.singleShot(
+            0,
+            lambda: self._ajustar_tamano_al_tab(idx)
+        )
+    def _ajustar_tamano_al_tab(self, idx):
+        """
+        Ajusta automáticamente la altura de Preferencias según
+        el contenido de la pestaña actual.
+
+        Si el contenido supera la altura máxima, se mantiene
+        el scroll interno.
+        """
+
+        if self._stack is None:
+            return
+
+        pagina = self._stack.widget(idx)
+
+        if pagina is None:
+            return
+
+        # ----------------------------------------------------------
+        # Obtener la altura real del contenido
+        # ----------------------------------------------------------
+        if isinstance(pagina, QScrollArea):
+            contenido = pagina.widget()
+
+            if contenido is not None:
+                alto_contenido = contenido.sizeHint().height()
+            else:
+                alto_contenido = pagina.sizeHint().height()
+
+        elif hasattr(pagina, "contenido"):
+            # PanelControlTiempo tiene su propio QScrollArea interno
+            contenido = pagina.contenido
+            alto_contenido = contenido.sizeHint().height()
+
+        else:
+            alto_contenido = pagina.sizeHint().height()
+
+        # ----------------------------------------------------------
+        # Espacio ocupado por:
+        # título de ventana + pestañas + divisor
+        # ----------------------------------------------------------
+        alto_extra = 95
+
+        alto_deseado = alto_contenido + alto_extra
+
+        # No permitir que la ventana sea demasiado pequeña
+        # ni demasiado grande.
+        alto_deseado = max(420, alto_deseado)
+        alto_deseado = min(760, alto_deseado)
+
+        # Ancho compacto
+        ancho_deseado = 440
+
+        self.resize(
+            ancho_deseado,
+            alto_deseado
+        )
+
+        # Volver a centrar respecto a la ventana principal
+        if self.parent():
+            p_geo = self.parent().geometry()
+
+            self.move(
+                p_geo.center().x() - self.width() // 2,
+                p_geo.center().y() - self.height() // 2,
+            )
     # ============================================================
     # TAB 1 — GENERAL
     # ============================================================
