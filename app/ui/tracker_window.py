@@ -1,15 +1,16 @@
 # app/ui/tracker_window.py
 from datetime import date, datetime, timedelta
-from app.utils import preferencias_store as PS
+
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QDialog, QSizePolicy,
 )
 from app.styles.colors import RADIO_CHIP
-
+from app.services.monitor_energia import MonitorEnergia
 from app.services.api_client import ApiClient
 from app.services.inactividad import MonitorInactividad
+from app.services.recordatorios import ServicioRecordatorios, leer_int
 from app.ui.dialogs import (
     confirmar_eliminar,
     ModalInactividad,
@@ -20,6 +21,7 @@ from app.ui.widgets import (
     EntradaBox,
     HistorialView,
 )
+from app.utils import preferencias_store as PS
 from app.utils.workers import ApiWorker, formatear_duracion
 from app.styles import tracker as S
 
@@ -28,8 +30,29 @@ from app.styles import tracker as S
 ANCHO_MAX_CHIP = 180
 MAX_CHARS_CHIP = 24
 
-# Heartbeat: consulta al servidor cada 5 s
+# Heartbeat: consulta al servidor cada 5 s (detecta timers de la web)
 INTERVALO_HEARTBEAT_MS = 5000
+
+# Ping de vida: avisa al servidor cada 60 s que el timer sigue activo
+INTERVALO_PING_MS = 60_000
+
+# El umbral de inactividad y el límite para forzar la detención no son
+# constantes: se leen de las preferencias (leer_int("inact_umbral_min") y
+# leer_int("inact_limite_min")), que configura el administrador.
+
+# Claves de preferencias (con valor por defecto por si aún no existen en PS)
+KEY_MOSTRAR_AL_TIMER_WEB = getattr(
+    PS, "KEY_MOSTRAR_AL_TIMER_WEB", PS.KEY_MOSTRAR_AL_INICIAR
+)
+KEY_SIEMPRE_VISIBLE = getattr(PS, "KEY_SIEMPRE_VISIBLE", "siempre_visible")
+KEY_SIN_CONEXION = getattr(PS, "KEY_SIN_CONEXION", "sin_conexion")
+
+# Mensajes cuando el temporizador se detiene por eventos del sistema
+MENSAJES_ENERGIA = {
+    "bloqueo": "El temporizador se detuvo porque se bloqueó la pantalla.",
+    "reposo": "El temporizador se detuvo porque el equipo estuvo en reposo.",
+    "apagado": "El temporizador se detuvo porque el equipo se está apagando.",
+}
 
 
 class TrackerWindow(QWidget):
@@ -39,15 +62,18 @@ class TrackerWindow(QWidget):
         super().__init__()
         self.client = client
         self.usuario = usuario
+        self.es_admin = str(usuario.get("rol", "")).lower() in ("admin", "administrador")
         self.registro_activo = None
         self.segundos_transcurridos = 0
         self._workers = []
         self._entrada_actual = None
 
-        # Estado del heartbeat / cierre
-        self._ocupado = False          # True mientras hay una acción local en curso
-        self._hb_en_curso = False      # evita consultas solapadas
-        self._cerrando_real = False    # True solo al cerrar sesión o "Salir"
+        # Estado del heartbeat / cierre / inactividad
+        self._ocupado = False            # True mientras hay una acción local en curso
+        self._hb_en_curso = False        # evita consultas solapadas
+        self._cerrando_real = False      # True solo al cerrar sesión o "Salir"
+        self._forzar_detencion = False   # True si el modal de inactividad expiró
+        self._motivo_energia = ""        # bloqueo / reposo / apagado
 
         # Cache
         self._proyectos = []
@@ -56,18 +82,22 @@ class TrackerWindow(QWidget):
 
         self.setWindowTitle(f"Control de Asistencia - {usuario.get('nombre', '')}")
         self.setWindowFlag(Qt.FramelessWindowHint)
-        # ✅ Elimina el borde fantasma de Windows
+        # Elimina el borde fantasma de Windows
         self.setAttribute(Qt.WA_TranslucentBackground)
 
         self.resize(420, 600)
         self.setMinimumWidth(380)
         self.setMinimumHeight(480)
-        # ❌ NO aplicar setStyleSheet aquí
+        # NO aplicar setStyleSheet aquí
 
         self._armar_ui()
 
         self.reloj = QTimer(self)
         self.reloj.timeout.connect(self._tick)
+
+        # Monitor de inactividad (el umbral se relee cada vez que arranca un timer)
+        self.monitor_inactividad = None
+        self._preparar_monitor_inactividad()
 
         self._revisar_temporizador_activo()
         self._cargar_historial()
@@ -75,15 +105,32 @@ class TrackerWindow(QWidget):
         self._precargar_proyectos()
         self._precargar_etiquetas()
 
-        self.monitor_inactividad = MonitorInactividad(umbral_segundos=300, padre=self)
-        self.monitor_inactividad.inactividad_detectada.connect(self._on_inactividad_detectada)
-        self.monitor_inactividad.actividad_reanudada.connect(self._on_actividad_reanudada)
-
         # Heartbeat: detecta timers iniciados/detenidos desde la web.
         # Arranca aquí (no en showEvent) para correr aunque la ventana esté oculta.
         self.heartbeat = QTimer(self)
         self.heartbeat.timeout.connect(self._heartbeat)
         self.heartbeat.start(INTERVALO_HEARTBEAT_MS)
+
+        # Ping de vida: el servidor cierra el timer si dejan de llegar pings
+        self.ping_timer = QTimer(self)
+        self.ping_timer.timeout.connect(self._ping)
+        self.ping_timer.start(INTERVALO_PING_MS)
+
+        # Recordatorios: avisan por la notificación de Windows si no hay timer activo.
+        # La bandeja se conecta desde main.py con self.recordatorios.set_tray(tray)
+        self.recordatorios = ServicioRecordatorios(
+            lambda: self.registro_activo is not None,
+            parent=self,
+        )
+
+        # Preferencia "Mantener la aplicación siempre visible"
+        if PS.get_bool(KEY_SIEMPRE_VISIBLE, False):
+            self.aplicar_siempre_visible(True)
+
+        # Bloqueo de pantalla, reposo y apagado (según Control de tiempo).
+        # Va después de aplicar_siempre_visible: cambiar flags recrea la ventana nativa.
+        self.energia = MonitorEnergia(int(self.winId()), self)
+        self.energia.detener.connect(self._detener_por_energia)
 
     # ================= UI =================
     def _armar_ui(self):
@@ -298,6 +345,27 @@ class TrackerWindow(QWidget):
         self.label_mensaje.setVisible(True)
         QTimer.singleShot(4000, lambda: self.label_mensaje.setVisible(False))
 
+    # ================= PREFERENCIAS EN VIVO =================
+    def _sin_conexion(self) -> bool:
+        return PS.get_bool(KEY_SIN_CONEXION, False)
+
+    def aplicar_siempre_visible(self, activo: bool):
+        """Llamado desde Preferencias: la ventana queda por encima de las demás."""
+        estaba_visible = self.isVisible()
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, activo)
+        if estaba_visible:
+            self.show()   # cambiar flags oculta la ventana; hay que mostrarla otra vez
+
+    def aplicar_sin_conexion(self, activo: bool):
+        """Llamado desde Preferencias: pausa o reanuda la sincronización."""
+        if activo:
+            self._mostrar_mensaje(
+                "Modo sin conexión: no se detectan timers de la web.", "error"
+            )
+        else:
+            self._mostrar_mensaje("Conexión restablecida.", "success")
+            self._heartbeat()   # sincroniza al instante
+
     # ================= CARGA DE DATOS =================
     def _limpiar_workers(self):
         """Quita de la lista los workers ya terminados (el heartbeat crea uno cada 5 s)."""
@@ -313,6 +381,10 @@ class TrackerWindow(QWidget):
 
     def _on_error_worker(self, mensaje: str):
         self._ocupado = False
+        # Si falló una parada/ajuste, el timer sigue activo en el servidor:
+        # reanudar el reloj local para que la pantalla no quede congelada.
+        if self.registro_activo and not self.reloj.isActive():
+            self.reloj.start(1000)
         self._mostrar_mensaje(mensaje, "error")
 
     # ================= CACHE =================
@@ -380,6 +452,7 @@ class TrackerWindow(QWidget):
         self.entrada_box.set_tiempo(formatear_duracion(self.segundos_transcurridos))
         self.entrada_box.set_estado(EntradaBox.ESTADO_CORRIENDO)
         self.reloj.start(1000)
+        self._preparar_monitor_inactividad()
         self.monitor_inactividad.iniciar()
 
     def _cargar_historial(self):
@@ -397,6 +470,11 @@ class TrackerWindow(QWidget):
     def _reanudar_registro(self, registro: dict):
         if self.registro_activo:
             self._mostrar_mensaje("Ya tienes un temporizador activo.", "error")
+            return
+        if self._sin_conexion():
+            self._mostrar_mensaje(
+                "Estás en modo sin conexión. Desactívalo para iniciar.", "error"
+            )
             return
         self._entrada_actual = {
             "descripcion": registro.get("descripcion") or "",
@@ -438,6 +516,12 @@ class TrackerWindow(QWidget):
         )
 
     def _on_play_stop(self):
+        if self._sin_conexion():
+            self._mostrar_mensaje(
+                "Estás en modo sin conexión. Desactívalo para iniciar o detener.",
+                "error",
+            )
+            return
         if self.registro_activo:
             self._detener()
         else:
@@ -479,6 +563,7 @@ class TrackerWindow(QWidget):
         self.entrada_box.set_tiempo("00:00:00")
         self.entrada_box.set_estado(EntradaBox.ESTADO_CORRIENDO)
         self.reloj.start(1000)
+        self._preparar_monitor_inactividad()
         self.monitor_inactividad.iniciar()
 
     def _detener(self):
@@ -489,7 +574,8 @@ class TrackerWindow(QWidget):
     def _on_detenido(self, registro):
         self._ocupado = False
         self.reloj.stop()   # necesario cuando se detiene desde la web
-        self.monitor_inactividad.detener()
+        if self.monitor_inactividad:
+            self.monitor_inactividad.detener()
         self.registro_activo = None
         self.segundos_transcurridos = 0
         self.entrada_box.set_tiempo("00:00:00")
@@ -501,6 +587,8 @@ class TrackerWindow(QWidget):
 
     # ================= HEARTBEAT =================
     def _heartbeat(self):
+        if self._sin_conexion():
+            return
         if self._ocupado or self._hb_en_curso or self._cerrando_real:
             return
         self._hb_en_curso = True
@@ -526,7 +614,7 @@ class TrackerWindow(QWidget):
             # Timer iniciado (o cambiado) desde la web
             self._on_temporizador_activo(registro)
             # Solo mostrar la ventana si el usuario lo permite
-            if PS.get_bool(PS.KEY_MOSTRAR_AL_INICIAR, True):
+            if PS.get_bool(KEY_MOSTRAR_AL_TIMER_WEB, True):
                 self._traer_al_frente()
         elif not registro and self.registro_activo:
             # Timer detenido desde la web
@@ -540,10 +628,109 @@ class TrackerWindow(QWidget):
         self.activateWindow()
         QApplication.alert(self, 0)   # parpadea en la barra si Windows no da foco
 
+    # ================= PING DE VIDA =================
+    def _ping(self):
+        """Avisa al servidor que el timer sigue vivo (para cierre automático si se apaga la PC)."""
+        if not self.registro_activo or self._cerrando_real:
+            return
+        if self._sin_conexion():
+            return
+        # Requiere ApiClient.ping_temporizador(registro_id); si aún no existe, no hace nada
+        if not hasattr(self.client, "ping_temporizador"):
+            return
+        self._limpiar_workers()
+        worker = ApiWorker(
+            self.client.ping_temporizador, self.registro_activo.get("id")
+        )
+        worker.exito.connect(lambda _: None)
+        worker.error.connect(lambda _: None)   # sin red: se reintenta al minuto
+        self._workers.append(worker)
+        worker.start()
+
+    # ================= BLOQUEO / REPOSO / APAGADO =================
+    def _detener_por_energia(self, motivo: str, segundos_perdidos: int):
+        """
+        Lo dispara MonitorEnergia solo si la preferencia está activada.
+        - bloqueo / apagado: se detiene directamente.
+        - reposo: primero se descuentan los segundos que el equipo estuvo dormido
+          y luego se detiene.
+        """
+        if not self.registro_activo or self._ocupado or self._cerrando_real:
+            return
+        if self._sin_conexion():
+            return
+
+        self._ocupado = True   # el heartbeat no interfiere
+        self._motivo_energia = motivo
+        self.reloj.stop()
+
+        if segundos_perdidos > 0:
+            self._lanzar(
+                self.client.ajustar_tiempo,
+                self._on_ajustado_por_energia,
+                registro_id=self.registro_activo.get("id"),
+                segundos_descontar=segundos_perdidos,
+            )
+        else:
+            self._lanzar(
+                self.client.detener_temporizador,
+                self._on_detenido_por_energia,
+            )
+
+    def _on_ajustado_por_energia(self, registro_actualizado):
+        if registro_actualizado:
+            self.registro_activo = registro_actualizado
+        self._lanzar(
+            self.client.detener_temporizador,
+            self._on_detenido_por_energia,
+        )
+
+    def _on_detenido_por_energia(self, registro):
+        self._on_detenido(registro)   # limpia estado y libera _ocupado
+        self._mostrar_mensaje(
+            MENSAJES_ENERGIA.get(
+                self._motivo_energia, "El temporizador se detuvo."
+            ),
+            "error",
+        )
+        self._motivo_energia = ""
+
     # ================= INACTIVIDAD =================
+    def _preparar_monitor_inactividad(self):
+        """
+        Crea el monitor con el umbral guardado en preferencias.
+        Se llama cada vez que arranca un timer, así los cambios del panel
+        aplican sin reiniciar la app.
+        """
+        anterior = self.monitor_inactividad
+        if anterior is not None:
+            try:
+                anterior.detener()
+            except Exception:
+                pass
+            for senal, slot in (
+                (anterior.inactividad_detectada, self._on_inactividad_detectada),
+                (anterior.actividad_reanudada, self._on_actividad_reanudada),
+            ):
+                try:
+                    senal.disconnect(slot)
+                except (TypeError, RuntimeError):
+                    pass
+            if hasattr(anterior, "deleteLater"):
+                anterior.deleteLater()
+
+        umbral = max(1, leer_int("inact_umbral_min")) * 60
+        self.monitor_inactividad = MonitorInactividad(
+            umbral_segundos=umbral,
+            padre=self,
+        )
+        self.monitor_inactividad.inactividad_detectada.connect(self._on_inactividad_detectada)
+        self.monitor_inactividad.actividad_reanudada.connect(self._on_actividad_reanudada)
+
     def _on_inactividad_detectada(self, segundos_inactivo: int):
         import time
         self._ocupado = True   # pausa el heartbeat mientras el modal está abierto
+        self._forzar_detencion = False
         self.reloj.stop()
         self._inicio_inactividad = self.monitor_inactividad.ultima_actividad
         minutos = max(1, int(round(segundos_inactivo / 60)))
@@ -558,15 +745,37 @@ class TrackerWindow(QWidget):
             actividad=desc or "(sin descripción)",
             segundos_inactivo_inicial=segundos_inactivo,
         )
+
+        # Corte automático: si nadie responde, cerrar el modal y detener.
+        # El límite (en minutos, contado desde que empezó la inactividad)
+        # lo define el administrador en Preferencias.
+        limite_seg = max(1, leer_int("inact_limite_min")) * 60
+        restante_ms = max(0, limite_seg - segundos_inactivo) * 1000
+        corte = QTimer(self)
+        corte.setSingleShot(True)
+
+        def forzar():
+            self._forzar_detencion = True
+            modal.reject()
+
+        corte.timeout.connect(forzar)
+        corte.start(restante_ms)
+
         modal.exec()
+        corte.stop()
 
         segundos_totales = int(time.time() - self._inicio_inactividad)
 
         if self.registro_activo:
-            # _ocupado se libera en _on_tiempo_ajustado o en _on_error_worker
+            # _ocupado se libera en _on_tiempo_ajustado, en _on_detenido o en _on_error_worker
+            callback = (
+                self._on_tiempo_ajustado_y_detener
+                if self._forzar_detencion
+                else self._on_tiempo_ajustado
+            )
             self._lanzar(
                 self.client.ajustar_tiempo,
-                self._on_tiempo_ajustado,
+                callback,
                 registro_id=self.registro_activo.get("id"),
                 segundos_descontar=segundos_totales,
             )
@@ -590,6 +799,21 @@ class TrackerWindow(QWidget):
             "Tiempo de inactividad descontado correctamente", "success"
         )
 
+    def _on_tiempo_ajustado_y_detener(self, registro_actualizado):
+        # Ya se descontó el tiempo inactivo: ahora se detiene el timer
+        if registro_actualizado:
+            self.registro_activo = registro_actualizado
+        self._lanzar(
+            self.client.detener_temporizador,
+            self._on_detenido_por_inactividad,
+        )
+
+    def _on_detenido_por_inactividad(self, registro):
+        self._on_detenido(registro)   # limpia estado y libera _ocupado
+        self._mostrar_mensaje(
+            "El temporizador se detuvo por inactividad prolongada.", "error"
+        )
+
     def _on_actividad_reanudada(self, segundos_inactivo: int):
         pass
 
@@ -604,7 +828,13 @@ class TrackerWindow(QWidget):
         # Cierre real (cerrar sesión o "Salir" de la bandeja)
         if hasattr(self, "heartbeat"):
             self.heartbeat.stop()
-        if hasattr(self, "monitor_inactividad"):
+        if hasattr(self, "ping_timer"):
+            self.ping_timer.stop()
+        if hasattr(self, "recordatorios"):
+            self.recordatorios.detener()
+        if hasattr(self, "energia"):
+            self.energia.cerrar()
+        if self.monitor_inactividad:
             self.monitor_inactividad.detener()
         if hasattr(self, "reloj"):
             self.reloj.stop()

@@ -21,7 +21,7 @@ class CustomTitleBar(QWidget):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet("""
             QWidget#CustomTitleBar {
-                background-color: #0d181f;    /* 🎨 Fondo oscuro de tu app */
+                background-color: #0d181f;    
                 border: none;
             }
             QWidget#CustomTitleBar QLabel {
@@ -31,14 +31,14 @@ class CustomTitleBar(QWidget):
             }
             QWidget#CustomTitleBar QPushButton {
                 background: transparent;
-                color: #b0bec5;                /* 🎨 Botones gris claro */
+                color: #b0bec5;               
                 border: none;
                 font-family: 'Segoe UI', sans-serif;
                 font-size: 10px;
                 font-weight: 600;
             }
             QWidget#CustomTitleBar QPushButton:hover {
-                background-color: #1a2b35;     /* 🎨 Hover sutil más claro */
+                background-color: #1a2b35;     
                 color: #ffffff;
             }
             QWidget#CustomTitleBar QPushButton#btn_close:hover {
@@ -107,7 +107,7 @@ class CustomTitleBar(QWidget):
     # ============================================================
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            # ✅ Solución nativa: le dice a Windows que arrastre la ventana
+            #  Solución nativa: le dice a Windows que arrastre la ventana
             handle = self.parent_window.windowHandle()
             if handle:
                 handle.startSystemMove()
