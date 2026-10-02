@@ -35,6 +35,14 @@ KEY_AUTO_SOLO_APPS = "auto/solo_apps"
 KEY_AUTO_IGNORAR_INACTIVIDAD = "auto/ignorar_inactividad"
 KEY_AUTO_INTERVALO = "auto/intervalo"
 
+# 🆕 Rastreador automático — claves adicionales
+KEY_RASTREADOR_ACTIVAR          = "rastreador/activar"
+KEY_RASTREADOR_AUTO_START       = "rastreador/auto_start"
+KEY_RASTREADOR_URLS             = "rastreador/urls"
+KEY_RASTREADOR_SEGUNDOS_MIN     = "rastreador/segundos_min"
+KEY_RASTREADOR_OCULTAR_ANADIDOS = "rastreador/ocultar_anadidos"
+KEY_RASTREADOR_AGRUPAR          = "rastreador/agrupar"
+
 
 # ============================================================
 # API
@@ -56,3 +64,19 @@ def get_str(key: str, default: str = "") -> str:
 
 def set_str(key: str, valor: str):
     _settings().setValue(key, valor)
+
+
+#  Helpers de enteros
+def get_int(key: str, default: int = 0) -> int:
+    try:
+        valor = _settings().value(key, default)
+        return int(valor)
+    except (ValueError, TypeError):
+        return default
+
+
+def set_int(key: str, valor: int):
+    try:
+        _settings().setValue(key, int(valor))
+    except (ValueError, TypeError):
+        _settings().setValue(key, 0)
