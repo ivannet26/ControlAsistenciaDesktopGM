@@ -3,7 +3,7 @@ from PySide6.QtGui import QFont, QIcon, QPixmap, QPainter, QColor, QPen, QBrush
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QWidget, QFrame, QCheckBox, QComboBox, QScrollArea,
-    QSizePolicy, QButtonGroup, QStackedWidget,
+    QSizePolicy, QButtonGroup, QStackedWidget, QSpinBox,
 )
 from app.ui.dialogs.panel_control_tiempo import PanelControlTiempo
 
@@ -236,9 +236,6 @@ class DialogoPreferencias(QDialog):
             btn.setChecked(i == idx)
             btn._actualizar_estilo()
 
-        # Ya NO se redimensiona ni se recentra la ventana.
-        # El scroll interno de cada pestaña se encarga del resto.
-
     # ============================================================
     # TAB 1 — GENERAL
     # ============================================================
@@ -383,40 +380,136 @@ class DialogoPreferencias(QDialog):
         layout.setContentsMargins(20, 14, 20, 14)
         layout.setSpacing(0)
 
+        # ---- Encabezado ----
         layout.addWidget(self._titulo_grande("Rastreador automático"))
+        layout.addSpacing(6)
+        layout.addWidget(self._descripcion(
+            "Todos los datos del rastreador automático se guardan "
+            "localmente en tu dispositivo y solo tú puedes ver la "
+            "actividad registrada."
+        ))
         layout.addSpacing(12)
 
-        layout.addWidget(self._subtitulo("Actividad a rastrear"))
+        # ============================================================
+        # OPCIONES DE SEGUIMIENTO
+        # ============================================================
+        layout.addWidget(self._subtitulo("Opciones de seguimiento"))
         layout.addSpacing(4)
+
+        # ---- SpinBox: segundos mínimos ----
+        segundos = QSpinBox()
+        segundos.setRange(1, 3600)
+        segundos.setValue(PS.get_int(PS.KEY_RASTREADOR_SEGUNDOS_MIN, 15))
+        segundos.setSuffix(" seg")
+        segundos.setFixedHeight(30)
+        segundos.setFixedWidth(65)
+        segundos.setStyleSheet(f"""
+            QSpinBox {{
+                background-color: {COLOR_INPUT_BG};
+                border: 1px solid {COLOR_BORDE_INPUT};
+                border-radius: {RADIO_INPUT}px;
+                color: {COLOR_TEXTO};
+                padding: 2px 10px;
+                font-size: 12px;
+            }}
+            QSpinBox:hover {{
+                border: 1px solid {COLOR_ACENTO};
+            }}
+            QSpinBox:focus {{
+                border: 1px solid {COLOR_ACENTO};
+            }}
+            QSpinBox::up-button,
+            QSpinBox::down-button {{
+                width: 0px;
+                height: 0px;
+                border: none;
+                background: transparent;
+                margin: 0px;
+                padding: 0px;
+            }}
+            QSpinBox::up-arrow,
+            QSpinBox::down-arrow {{
+                width: 0px;
+                height: 0px;
+                image: none;
+            }}
+        """)
+        segundos.valueChanged.connect(
+            lambda v: PS.set_int(PS.KEY_RASTREADOR_SEGUNDOS_MIN, v)
+        )
+        segundos.valueChanged.connect(
+            lambda v: PS.set_int(PS.KEY_RASTREADOR_SEGUNDOS_MIN, v)
+        )
+
         layout.addWidget(FilaAjuste(
-            "Activar rastreador automático",
-            ToggleSwitch(),
+            "Solo rastrear las aplicaciones que estén activas por más de",
+            segundos,
         ))
+        layout.addSpacing(2)
+
+        
+
+        # ---- Toggle: Rastrear URLs ----
+        self.toggle_urls = ToggleSwitch()
+        self.toggle_urls.setChecked(PS.get_bool(PS.KEY_RASTREADOR_URLS, False))
+        self.toggle_urls.toggled.connect(
+            lambda v: PS.set_bool(PS.KEY_RASTREADOR_URLS, v)
+        )
         layout.addWidget(FilaAjuste(
-            "Rastrear solo aplicaciones específicas",
-            ToggleSwitch(),
-        ))
-        layout.addWidget(FilaAjuste(
-            "Ignorar inactividad menor a 5 minutos",
-            ToggleSwitch(),
+            "Rastrear las URL visitadas (Chrome y Firefox)",
+            self.toggle_urls,
         ))
 
-        layout.addSpacing(12)
-        layout.addWidget(self._divisor())
-        layout.addSpacing(10)
+        # ---- Toggle: Ocultar añadidos ----
+        self.toggle_ocultar = ToggleSwitch()
+        self.toggle_ocultar.setChecked(
+            PS.get_bool(PS.KEY_RASTREADOR_OCULTAR_ANADIDOS, False)
+        )
+        self.toggle_ocultar.toggled.connect(
+            lambda v: PS.set_bool(PS.KEY_RASTREADOR_OCULTAR_ANADIDOS, v)
+        )
+        layout.addWidget(FilaAjuste(
+            "Ocultar elementos añadidos",
+            self.toggle_ocultar,
+        ))
 
-        layout.addWidget(self._subtitulo("Intervalo de captura"))
+        # ---- Toggle: Agrupar por nombre/descripción ----
+        self.toggle_agrupar = ToggleSwitch()
+        self.toggle_agrupar.setChecked(
+            PS.get_bool(PS.KEY_RASTREADOR_AGRUPAR, False)
+        )
+        self.toggle_agrupar.toggled.connect(
+            lambda v: PS.set_bool(PS.KEY_RASTREADOR_AGRUPAR, v)
+        )
+        layout.addWidget(FilaAjuste(
+            "Agrupar por Nombre de aplicación y Descripción",
+            self.toggle_agrupar,
+        ))
+
         layout.addSpacing(4)
-        layout.addWidget(self._crear_combo([
-            "Cada 30 segundos", "Cada 1 minuto", "Cada 5 minutos"
-        ]))
+        layout.addWidget(self._descripcion(
+            "Cuando está deshabilitado, los registros registrados en la "
+            "Vista de grupo se agrupan tanto por Nombre de la aplicación "
+            "como por Descripción."
+        ))
+        layout.addSpacing(8)
+
+        # ---- Toggle: Iniciar automáticamente ----
+        self.toggle_iniciar_auto = ToggleSwitch()
+        self.toggle_iniciar_auto.setChecked(
+            PS.get_bool(PS.KEY_RASTREADOR_AUTO_START, False)
+        )
+        self.toggle_iniciar_auto.toggled.connect(self._on_rastreador_toggle)
+        layout.addWidget(FilaAjuste(
+            "Iniciar automáticamente el rastreador automático",
+            self.toggle_iniciar_auto,
+        ))
 
         layout.addSpacing(8)
         layout.addStretch()
 
         return self._con_scroll(contenido)
-
-    # ============================================================
+        # ============================================================
     # TAB 4 — CUENTA
     # ============================================================
     def _tab_cuenta(self):
@@ -428,19 +521,41 @@ class DialogoPreferencias(QDialog):
         layout.setContentsMargins(20, 14, 20, 14)
         layout.setSpacing(0)
 
+        # ---- Obtener datos del usuario logueado ----
+        usuario = {}
+        p = self.parent()
+        while p is not None and not hasattr(p, "usuario"):
+            p = p.parent() if hasattr(p, "parent") else None
+        if p is not None:
+            usuario = getattr(p, "usuario", {}) or {}
+
+        nombre = usuario.get("nombre", "") or "(sin sesión)"
+        email = (
+            usuario.get("email")
+            or usuario.get("correo")
+            or usuario.get("correo_electronico")
+            or ""
+        )
+        if not email and usuario.get("nombre"):
+            # Fallback: generar email a partir del nombre
+            email = usuario["nombre"].lower().replace(" ", ".") + "@gmail.com"
+
+        # ---- Título ----
         layout.addWidget(self._titulo_grande("Cuenta"))
         layout.addSpacing(12)
 
+        # ---- Datos personales ----
         layout.addWidget(self._subtitulo("Datos personales"))
         layout.addSpacing(6)
-        layout.addWidget(self._campo_texto("Nombre completo", "Frank corilla"))
+        layout.addWidget(self._campo_texto("Nombre completo", nombre))
         layout.addSpacing(6)
-        layout.addWidget(self._campo_texto("Correo electrónico", "frankcorilla2015@gmail.com"))
+        layout.addWidget(self._campo_texto("Correo electrónico", email))
 
         layout.addSpacing(12)
         layout.addWidget(self._divisor())
         layout.addSpacing(10)
 
+        # ---- Seguridad ----
         layout.addWidget(self._subtitulo("Seguridad"))
         layout.addSpacing(6)
 
@@ -464,6 +579,7 @@ class DialogoPreferencias(QDialog):
                 background-color: rgba(33, 150, 243, 0.25);
             }}
         """)
+        btn_password.clicked.connect(self._on_cambiar_password)
         layout.addWidget(btn_password, 0, Qt.AlignLeft)
 
         layout.addSpacing(8)
@@ -471,6 +587,19 @@ class DialogoPreferencias(QDialog):
 
         return self._con_scroll(contenido)
 
+    def _on_cambiar_password(self):
+        """Placeholder — aquí conectarás con tu backend."""
+        from PySide6.QtWidgets import QMessageBox
+        QMessageBox.information(
+            self,
+            "Cambiar contraseña",
+            "Esta función se conectará con el servidor de GM Ingenieros.\n"
+            "Próximamente disponible.",
+        )
+
+    # ============================================================
+    # HANDLERS
+    # ============================================================
     def _on_autostart_cambiado(self, activo: bool):
         ok = autostart.aplicar(activo)
         if not ok:
@@ -481,6 +610,21 @@ class DialogoPreferencias(QDialog):
 
     def _on_mostrar_al_iniciar_cambiado(self, activo: bool):
         PS.set_bool(PS.KEY_MOSTRAR_AL_INICIAR, activo)
+
+    def _on_rastreador_toggle(self, activo: bool):
+        """Guarda la preferencia Y avisa al TrackerWindow en caliente."""
+        PS.set_bool(PS.KEY_RASTREADOR_AUTO_START, activo)
+
+        # Buscar el TrackerWindow subiendo por la cadena de padres
+        ventana = self.parent()
+        while ventana is not None and not hasattr(ventana, "aplicar_rastreador_activo"):
+            ventana = ventana.parent() if hasattr(ventana, "parent") else None
+
+        if ventana is not None:
+            ventana.aplicar_rastreador_activo(activo)
+            print(f"[Prefs] Rastreador {'activado' if activo else 'desactivado'} en TrackerWindow")
+        else:
+            print(f"[Prefs] Rastreador {'activado' if activo else 'desactivado'} (sin TrackerWindow — arrancará al reiniciar)")
 
     # ============================================================
     # HELPERS

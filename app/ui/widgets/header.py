@@ -16,7 +16,7 @@ COLOR_ORG = "#8ea0af"      # gris azulado, sobrio
 COLOR_TITULO = "#ffffff"
 COLOR_LINEA = "#2196f3"    # acento discreto
 
-VERSION_APP = "2.3.1"
+VERSION_APP = "1.0.4"
 
 
 class HeaderWidget(QWidget):
@@ -198,9 +198,9 @@ class HeaderWidget(QWidget):
         menu.addSeparator()
 
         # ---- Opciones rápidas ----
-        acc_actualizar = QAction("Actualizar", self)
-        acc_actualizar.triggered.connect(self._on_actualizar)
-        menu.addAction(acc_actualizar)
+        #acc_actualizar = QAction("Actualizar", self)
+        #acc_actualizar.triggered.connect(self._on_actualizar)
+        #menu.addAction(acc_actualizar)
 
         acc_mini = QAction("Usar mini temporizador", self)
         acc_mini.triggered.connect(lambda: print("[Menú] Mini temporizador"))
@@ -217,13 +217,13 @@ class HeaderWidget(QWidget):
         menu.addSeparator()
 
         # ---- Informes y ayuda ----
-        acc_info = QAction("Informes", self)
-        acc_info.triggered.connect(lambda: print("[Menú] Informes"))
-        menu.addAction(acc_info)
+        #acc_info = QAction("Informes", self)
+        #acc_info.triggered.connect(lambda: print("[Menú] Informes"))
+        #menu.addAction(acc_info)
 
-        acc_ayuda = QAction("Ayuda de GM", self)
-        acc_ayuda.triggered.connect(lambda: print("[Menú] Ayuda"))
-        menu.addAction(acc_ayuda)
+        #acc_ayuda = QAction("Ayuda de GM", self)
+        #acc_ayuda.triggered.connect(lambda: print("[Menú] Ayuda"))
+        #menu.addAction(acc_ayuda)
 
         menu.addSeparator()
 
@@ -232,9 +232,9 @@ class HeaderWidget(QWidget):
         acc_version.setEnabled(False)
         menu.addAction(acc_version)
 
-        acc_feedback = QAction("Compartir feedback", self)
-        acc_feedback.triggered.connect(lambda: print("[Menú] Feedback"))
-        menu.addAction(acc_feedback)
+        #acc_feedback = QAction("Compartir feedback", self)
+        #acc_feedback.triggered.connect(lambda: print("[Menú] Feedback"))
+        #menu.addAction(acc_feedback)
 
         # ---- Cerrar sesión ----
         acc_cerrar = QAction("Cerrar sesión", self)
@@ -317,25 +317,24 @@ class HeaderWidget(QWidget):
         dlg = DialogoPreferencias(self.window())
         dlg.exec()
     def _abrir_rastreador_auto(self):
-        """
-        Abre el visor del rastreador automático.
-        Pide los datos al TrackerWindow (que tiene el cliente API)
-        y los pasa al diálogo.
-        """
-        ventana = self.window()
+        from app.ui.dialogs.rastreador_auto import VentanaRastreadorAuto
 
-        registros = []
-        grupo = []
+        # Buscar el TrackerWindow subiendo por la cadena de padres
+        ventana = self
+        cb = None
+        while ventana is not None:
+            cb = getattr(ventana, "obtener_registros_rastreador", None)
+            if cb is not None:
+                break
+            ventana = ventana.parent() if hasattr(ventana, "parent") else None
 
-        # Si el TrackerWindow expone un método para obtener los datos,
-        # lo usamos. Así el header no necesita saber de ApiClient.
-        if hasattr(ventana, "obtener_registros_rastreador"):
-            registros, grupo = ventana.obtener_registros_rastreador()
+        if cb is None:
+            print("[Header] ⚠️  No encontré 'obtener_registros_rastreador'")
+            return
 
         dlg = VentanaRastreadorAuto(
             parent=ventana,
-            registros=registros,
-            grupo=grupo,
+            cargar_datos_cb=cb,
         )
         dlg.exec()
     def _on_actualizar(self):

@@ -10,6 +10,13 @@ from app.services.monitor_energia import MonitorEnergia
 from app.services.api_client import ApiClient
 from app.services.inactividad import MonitorInactividad
 from app.services.recordatorios import ServicioRecordatorios, leer_int
+from app.services.rastreador import (
+    RastreadorAuto,
+    NAVEGADORES_CONOCIDOS,
+    COLORES_POR_APP,
+    COLOR_POR_DEFECTO,
+)
+from app.services import navegador_historial as NH
 from app.ui.dialogs import (
     confirmar_eliminar,
     ModalInactividad,
@@ -35,9 +42,11 @@ INTERVALO_HEARTBEAT_MS = 5000
 # Ping de vida: avisa al servidor cada 60 s que el timer sigue activo
 INTERVALO_PING_MS = 60_000
 
-# El umbral de inactividad y el límite para forzar la detención no son
-# constantes: se leen de las preferencias (leer_int("inact_umbral_min") y
-# leer_int("inact_limite_min")), que configura el administrador.
+# Intervalo de muestreo del rastreador automático (segundos)
+INTERVALO_RASTREADOR_SEG = 2
+
+# Ventana máxima hacia atrás para asociar una URL a un segmento (segundos)
+VENTANA_URL_MAX_SEG = 1800
 
 # Claves de preferencias (con valor por defecto por si aún no existen en PS)
 KEY_MOSTRAR_AL_TIMER_WEB = getattr(
@@ -45,6 +54,12 @@ KEY_MOSTRAR_AL_TIMER_WEB = getattr(
 )
 KEY_SIEMPRE_VISIBLE = getattr(PS, "KEY_SIEMPRE_VISIBLE", "siempre_visible")
 KEY_SIN_CONEXION = getattr(PS, "KEY_SIN_CONEXION", "sin_conexion")
+
+
+# Claves del rastreador automático (usar las de PS)
+# KEY_RASTREADOR_ACTIVAR  → PS.KEY_RASTREADOR_ACTIVAR
+# KEY_RASTREADOR_AUTO_START → PS.KEY_RASTREADOR_AUTO_START
+# KEY_RASTREADOR_URLS → PS.KEY_RASTREADOR_URLS
 
 # Mensajes cuando el temporizador se detiene por eventos del sistema
 MENSAJES_ENERGIA = {
@@ -130,6 +145,29 @@ class TrackerWindow(QWidget):
         # Va después de aplicar_siempre_visible: cambiar flags recrea la ventana nativa.
         self.energia = MonitorEnergia(int(self.winId()), self)
         self.energia.detener.connect(self._detener_por_energia)
+
+        # ============================================================
+        # RASTREADOR AUTOMÁTICO
+        # ============================================================
+        self.rastreador = RastreadorAuto(
+            intervalo_seg=INTERVALO_RASTREADOR_SEG, parent=self
+        )
+        self.rastreador.segmento_cerrado.connect(self._on_segmento_cerrado)
+        self.rastreador.error.connect(
+            lambda msg: self._mostrar_mensaje(f"[Rastreador] {msg}", "error")
+        )
+
+        # Arrancarlo si la preferencia está activa
+        activar = (
+            PS.get_bool(PS.KEY_RASTREADOR_AUTO_START, False)
+            or PS.get_bool(PS.KEY_RASTREADOR_ACTIVAR, False)
+        )
+        print(f"[Rastreador] __init__ — activar={activar}")
+        if activar:
+            self.rastreador.iniciar()
+            print(f"[Rastreador] iniciado — activo={self.rastreador.activo}")
+        else:
+            print("[Rastreador] NO se arrancó (preferencia OFF)")
 
     # ================= UI =================
     def _armar_ui(self):
@@ -364,6 +402,13 @@ class TrackerWindow(QWidget):
         else:
             self._mostrar_mensaje("Conexión restablecida.", "success")
             self._heartbeat()   # sincroniza al instante
+
+    def aplicar_rastreador_activo(self, activo: bool):
+        """Llamado desde Preferencias para arrancar/parar el rastreador en caliente."""
+        if activo and not self.rastreador.activo:
+            self.rastreador.iniciar()
+        elif not activo and self.rastreador.activo:
+            self.rastreador.detener()
 
     # ================= CARGA DE DATOS =================
     def _limpiar_workers(self):
@@ -817,89 +862,204 @@ class TrackerWindow(QWidget):
         pass
 
     # ================= RASTREADOR AUTOMÁTICO =================
-    def obtener_registros_rastreador(self):
+    def _on_segmento_cerrado(self, _info):
+        """Callback cuando el rastreador cierra un segmento (app cambió)."""
+        # No hacemos nada por ahora; el visor lee la BD bajo demanda.
+        pass
+
+    # -------- Helpers de formato --------
+    @staticmethod
+    def _hora_de_iso(iso_str: str) -> str:
+        """'2026-10-02T21:10:05' → '21:10'"""
+        if not iso_str:
+            return "—"
+        try:
+            return datetime.fromisoformat(iso_str).strftime("%H:%M")
+        except (ValueError, TypeError):
+            return "—"
+
+    @staticmethod
+    def _seg_a_hhmmss(seg: int) -> str:
+        seg = max(0, int(seg or 0))
+        h, resto = divmod(seg, 3600)
+        m, s = divmod(resto, 60)
+        return f"{h:02d}:{m:02d}:{s:02d}"
+
+    # -------- URL activa por segmento --------
+    def _url_para_segmento(self, historial, inicio_iso, fin_iso, navegador_exe,
+                           ventana_max_seg=VENTANA_URL_MAX_SEG):
         """
-        Devuelve (registros, grupo) para el visor del Rastreador automático
-        (app/ui/dialogs/rastreador_auto.py).
+        Devuelve la URL "activa" durante un segmento de navegador.
 
-        - `registros`: lista de dicts con las claves:
-            app, descripcion, url, hora_inicio, hora_fin,
-            duracion, inactividad (0..1), color (hex)
-        - `grupo`: lista con app, uso_pct (float), total_str
-
-        ⚠️ Por ahora devuelve datos de ejemplo. Sustituye el cuerpo
-        cuando tengas la tabla / endpoint real del rastreador.
+        Estrategia:
+          1. Buscar la última visita ANTES o DURANTE el segmento
+             (máx `ventana_max_seg` atrás).
+          2. Si no hay nada en esa ventana, coger la última visita
+             del navegador antes del segmento (sin límite). Así pestañas
+             abiertas hace rato también enganchan su URL.
         """
-        # ------------------------------------------------------------------
-        # TODO: Sustituir por la consulta real (BD local o API).
-        # Ejemplo si tuvieras un endpoint:
-        #
-        #   data = self.client.obtener_actividad_automatica(
-        #       fecha=date.today().isoformat()
-        #   )
-        #   return data["registros"], data["grupo"]
-        # ------------------------------------------------------------------
-        registros_demo = [
-            {
-                "app": "ClockifyWindows",
-                "descripcion": "Clockify",
-                "url": "",
-                "hora_inicio": "21:10",
-                "hora_fin": "21:10",
-                "duracion": "00:00:51",
-                "inactividad": 0.70,
-                "color": "#2196f3",
-            },
-            {
-                "app": "Microsoft Edge",
-                "descripcion": "Historias • Instagram",
-                "url": "https://www.instagram.com",
-                "hora_inicio": "21:11",
-                "hora_fin": "21:12",
-                "duracion": "00:01:20",
-                "inactividad": 0.35,
-                "color": "#2196f3",
-            },
-            {
-                "app": "dota2",
-                "descripcion": "Dota 2",
-                "url": "",
-                "hora_inicio": "21:12",
-                "hora_fin": "21:36",
-                "duracion": "00:23:25",
-                "inactividad": 0.07,
-                "color": "#b71c1c",
-            },
-            {
-                "app": "Microsoft Edge",
-                "descripcion": "Mis plataformas",
-                "url": "https://fiorprd.udm.mx",
-                "hora_inicio": "21:36",
-                "hora_fin": "21:36",
-                "duracion": "00:00:17",
-                "inactividad": 0.11,
-                "color": "#2196f3",
-            },
-            {
-                "app": "Brave",
-                "descripcion": "NinaDrama - Watch",
-                "url": "https://kick.com/ninadrama",
-                "hora_inicio": "21:42",
-                "hora_fin": "21:43",
-                "duracion": "00:00:36",
-                "inactividad": 0.36,
-                "color": "#ff6d00",
-            },
-        ]
+        if not historial or not inicio_iso:
+            return None
 
-        grupo_demo = [
-            {"app": "ClockifyWindows", "uso_pct": 1.8,  "total_str": "00:00:51"},
-            {"app": "Microsoft Edge", "uso_pct": 3.4,  "total_str": "00:01:37"},
-            {"app": "dota2",          "uso_pct": 61.8, "total_str": "00:29:27"},
-            {"app": "Brave",          "uso_pct": 33.1, "total_str": "00:15:46"},
-        ]
+        try:
+            ini = datetime.fromisoformat(inicio_iso)
+            fin = datetime.fromisoformat(fin_iso) if fin_iso else datetime.now()
+        except (ValueError, TypeError):
+            return None
 
-        return registros_demo, grupo_demo
+        mapa_exe = {
+            "chrome.exe":  ("chrome",),
+            "msedge.exe":  ("edge",),
+            "firefox.exe": ("firefox",),
+            "brave.exe":   ("brave",),
+            "opera.exe":   ("opera",),
+            "vivaldi.exe": ("vivaldi",),
+        }
+        aceptados = mapa_exe.get(navegador_exe, ())
+
+        limite_inferior = ini - timedelta(seconds=ventana_max_seg)
+
+        candidatas = []     # dentro de la ventana
+        todas_antes = []    # antes del segmento, sin límite (fallback)
+
+        for v in historial:
+            if aceptados and v.get("navegador") not in aceptados:
+                continue
+            fv = v.get("fecha")
+            if not isinstance(fv, datetime):
+                continue
+            fv_naive = fv.replace(tzinfo=None) if fv.tzinfo else fv
+            ini_naive = ini.replace(tzinfo=None) if ini.tzinfo else ini
+            fin_naive = fin.replace(tzinfo=None) if fin.tzinfo else fin
+
+            if limite_inferior <= fv_naive <= fin_naive:
+                candidatas.append((fv_naive, v))
+            elif fv_naive < ini_naive:
+                todas_antes.append((fv_naive, v))
+
+        # 1) Mejor candidata dentro de la ventana
+        if candidatas:
+            candidatas.sort(key=lambda x: x[0], reverse=True)
+            return candidatas[0][1]
+
+        # 2) Fallback: última visita ANTES del segmento, sin límite
+        if todas_antes:
+            todas_antes.sort(key=lambda x: x[0], reverse=True)
+            return todas_antes[0][1]
+
+        return None
+
+    # -------- Método principal --------
+    def obtener_registros_rastreador(self, fecha_iso=None):
+        if fecha_iso is None:
+            fecha_iso = date.today().isoformat()
+
+        print(f"[DEBUG] obtener_registros_rastreador(fecha_iso={fecha_iso!r})")
+
+        # Refrescamos la duración del segmento activo (si sigue corriendo)
+        try:
+            self.rastreador.db.actualizar_duracion_activa()
+        except Exception:
+            pass
+
+        # 1) Segmentos de apps desde la BD
+        try:
+            segmentos = self.rastreador.db.obtener_segmentos(fecha_iso)
+            print(f"[DEBUG] BD devolvió {len(segmentos)} segmentos")
+        except Exception as e:
+            print(f"[Rastreador] Error leyendo segmentos: {e}")
+            segmentos = []
+
+        # 2) Historial del navegador para ese día
+        try:
+            fecha_obj = datetime.fromisoformat(fecha_iso).date()
+        except (ValueError, TypeError):
+            fecha_obj = date.today()
+
+        historial = []
+        if NH.disponible() and PS.get_bool(PS.KEY_RASTREADOR_URLS, False):
+            try:
+                historial = NH.obtener_historial(fecha=fecha_obj)
+            except Exception as e:
+                print(f"[Rastreador] Error leyendo historial navegador: {e}")
+
+        # 3) Fusionar
+        registros = []
+        for seg in segmentos:
+            app = (seg.get("app") or "").lower()
+            inicio_iso = seg.get("inicio")
+            fin_iso = seg.get("fin")
+            duracion = int(seg.get("duracion_seg") or 0)
+
+            hora_ini = self._hora_de_iso(inicio_iso)
+            hora_fin = self._hora_de_iso(fin_iso) if fin_iso else "en curso"
+            dur_str = self._seg_a_hhmmss(duracion)
+            color = COLORES_POR_APP.get(app, COLOR_POR_DEFECTO)
+
+            es_navegador = app in NAVEGADORES_CONOCIDOS
+
+            if es_navegador:
+                # URL del historial (SOLO la columna URL)
+                visita = self._url_para_segmento(
+                    historial, inicio_iso, fin_iso, app
+                )
+                # Descripción: SIEMPRE del segmento (título real de la ventana)
+                desc_seg = seg.get("descripcion") or seg.get("titulo") or ""
+                url_seg = visita.get("url", "") if visita else ""
+
+                registros.append({
+                    "app": NAVEGADORES_CONOCIDOS[app],
+                    "descripcion": desc_seg,
+                    "url": url_seg,
+                    "hora_inicio": hora_ini,
+                    "hora_fin": hora_fin,
+                    "duracion": dur_str,
+                    "inactividad": 0.0,
+                    "color": color,
+                })
+            else:
+                registros.append({
+                    "app": app or "desconocido",
+                    "descripcion": seg.get("descripcion") or seg.get("titulo") or "",
+                    "url": "",
+                    "hora_inicio": hora_ini,
+                    "hora_fin": hora_fin,
+                    "duracion": dur_str,
+                    "inactividad": 0.0,
+                    "color": color,
+                })
+
+        # Ordenar por hora de inicio
+        registros.sort(key=lambda r: (r["hora_inicio"] == "—", r["hora_inicio"]))
+
+        # 4) Vista de grupo (uso % por app)
+        grupo = self._construir_grupo(segmentos)
+        print(f"[DEBUG] Construidos {len(registros)} registros finales")
+        return registros, grupo
+
+    def _construir_grupo(self, segmentos):
+        """Agrupa por app y calcula % de uso y total."""
+        acumulado = {}
+        total_global = 0
+        for seg in segmentos:
+            app = (seg.get("app") or "desconocido").lower()
+            dur = int(seg.get("duracion_seg") or 0)
+            acumulado[app] = acumulado.get(app, 0) + dur
+            total_global += dur
+
+        grupo = []
+        for app, segundos in sorted(
+            acumulado.items(), key=lambda x: x[1], reverse=True
+        ):
+            uso = (segundos / total_global * 100) if total_global else 0
+            nombre = NAVEGADORES_CONOCIDOS.get(app, app)
+            grupo.append({
+                "app": nombre,
+                "uso_pct": round(uso, 1),
+                "total_str": self._seg_a_hhmmss(segundos),
+                "color": COLORES_POR_APP.get(app, COLOR_POR_DEFECTO),
+            })
+        return grupo
 
     # ================= CIERRE =================
     def closeEvent(self, event):
@@ -918,6 +1078,8 @@ class TrackerWindow(QWidget):
             self.recordatorios.detener()
         if hasattr(self, "energia"):
             self.energia.cerrar()
+        if hasattr(self, "rastreador"):
+            self.rastreador.detener()
         if self.monitor_inactividad:
             self.monitor_inactividad.detener()
         if hasattr(self, "reloj"):
