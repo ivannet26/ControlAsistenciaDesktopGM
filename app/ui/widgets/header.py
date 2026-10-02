@@ -4,7 +4,8 @@ from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QFrame, QLabel, QPushButton, QMenu,
     QSizePolicy, QWidgetAction,
 )
-
+from app.ui.dialogs.preferencias import DialogoPreferencias
+from app.ui.dialogs.rastreador_auto import VentanaRastreadorAuto
 from app.styles import tracker as S
 
 
@@ -20,7 +21,8 @@ VERSION_APP = "2.3.1"
 
 class HeaderWidget(QWidget):
     cerrar_sesion = Signal()
-    abrir_preferencias = Signal()   # para comunicar al TrackerWindow
+    abrir_preferencias = Signal()
+    abrir_rastreador_auto = Signal()
 
     def __init__(self, nombre_usuario: str, parent=None, email: str = ""):
         super().__init__(parent)
@@ -205,7 +207,7 @@ class HeaderWidget(QWidget):
         menu.addAction(acc_mini)
 
         acc_auto = QAction("Rastreador automático", self)
-        acc_auto.triggered.connect(lambda: print("[Menú] Rastreador automático"))
+        acc_auto.triggered.connect(self._abrir_rastreador_auto)
         menu.addAction(acc_auto)
 
         acc_pref = QAction("Preferencias", self)
@@ -314,7 +316,28 @@ class HeaderWidget(QWidget):
         from app.ui.dialogs.preferencias import DialogoPreferencias
         dlg = DialogoPreferencias(self.window())
         dlg.exec()
+    def _abrir_rastreador_auto(self):
+        """
+        Abre el visor del rastreador automático.
+        Pide los datos al TrackerWindow (que tiene el cliente API)
+        y los pasa al diálogo.
+        """
+        ventana = self.window()
 
+        registros = []
+        grupo = []
+
+        # Si el TrackerWindow expone un método para obtener los datos,
+        # lo usamos. Así el header no necesita saber de ApiClient.
+        if hasattr(ventana, "obtener_registros_rastreador"):
+            registros, grupo = ventana.obtener_registros_rastreador()
+
+        dlg = VentanaRastreadorAuto(
+            parent=ventana,
+            registros=registros,
+            grupo=grupo,
+        )
+        dlg.exec()
     def _on_actualizar(self):
         """Recarga los datos del tracker (historial, proyectos, etc.)."""
         # Buscamos la TrackerWindow padre y llamamos a su método

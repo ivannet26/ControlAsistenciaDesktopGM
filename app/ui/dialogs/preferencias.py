@@ -100,7 +100,7 @@ class FilaAjuste(QWidget):
         self.setStyleSheet("background: transparent; border: none;")
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 3, 0, 3)   # ⬅️ antes (0, 6, 0, 6)
+        layout.setContentsMargins(0, 3, 0, 3)
         layout.setSpacing(12)
 
         self.label = QLabel(etiqueta)
@@ -127,19 +127,14 @@ class DialogoPreferencias(QDialog):
         self.setWindowFlag(Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
-                # La altura se adaptará automáticamente según la pestaña.
-        self.setMinimumSize(430, 420)
-        self.setMaximumSize(450, 760)
-        self.resize(440, 540)
+        # Tamaño estándar fijo. Si el contenido es más alto,
+        # el QScrollArea interno muestra la barra de scroll.
+        self.setFixedSize(440, 620)
 
         self._tab_buttons = []
         self._stack = None
 
         self._armar_ui()
-        QTimer.singleShot(
-            0,
-            lambda: self._ajustar_tamano_al_tab(0)
-        )
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -191,7 +186,7 @@ class DialogoPreferencias(QDialog):
         es_admin = getattr(self.parent(), "es_admin", False)
         self.tab_control = PanelControlTiempo(es_admin=es_admin)
         self._stack.addWidget(self._tab_general())
-        self._stack.addWidget(self.tab_control)  
+        self._stack.addWidget(self.tab_control)
         self._stack.addWidget(self._tab_rastreador_auto())
         self._stack.addWidget(self._tab_cuenta())
 
@@ -202,7 +197,7 @@ class DialogoPreferencias(QDialog):
     # ============================================================
     def _crear_tabs(self):
         w = QWidget()
-        w.setFixedHeight(40)   
+        w.setFixedHeight(40)
         w.setStyleSheet(
             f"background-color: {COLOR_HEADER_SEMANA}; border: none;"
         )
@@ -241,76 +236,9 @@ class DialogoPreferencias(QDialog):
             btn.setChecked(i == idx)
             btn._actualizar_estilo()
 
-        # Esperamos a que Qt actualice el layout de la nueva pestaña
-        QTimer.singleShot(
-            0,
-            lambda: self._ajustar_tamano_al_tab(idx)
-        )
-    def _ajustar_tamano_al_tab(self, idx):
-        """
-        Ajusta automáticamente la altura de Preferencias según
-        el contenido de la pestaña actual.
+        # Ya NO se redimensiona ni se recentra la ventana.
+        # El scroll interno de cada pestaña se encarga del resto.
 
-        Si el contenido supera la altura máxima, se mantiene
-        el scroll interno.
-        """
-
-        if self._stack is None:
-            return
-
-        pagina = self._stack.widget(idx)
-
-        if pagina is None:
-            return
-
-        # ----------------------------------------------------------
-        # Obtener la altura real del contenido
-        # ----------------------------------------------------------
-        if isinstance(pagina, QScrollArea):
-            contenido = pagina.widget()
-
-            if contenido is not None:
-                alto_contenido = contenido.sizeHint().height()
-            else:
-                alto_contenido = pagina.sizeHint().height()
-
-        elif hasattr(pagina, "contenido"):
-            # PanelControlTiempo tiene su propio QScrollArea interno
-            contenido = pagina.contenido
-            alto_contenido = contenido.sizeHint().height()
-
-        else:
-            alto_contenido = pagina.sizeHint().height()
-
-        # ----------------------------------------------------------
-        # Espacio ocupado por:
-        # título de ventana + pestañas + divisor
-        # ----------------------------------------------------------
-        alto_extra = 95
-
-        alto_deseado = alto_contenido + alto_extra
-
-        # No permitir que la ventana sea demasiado pequeña
-        # ni demasiado grande.
-        alto_deseado = max(420, alto_deseado)
-        alto_deseado = min(760, alto_deseado)
-
-        # Ancho compacto
-        ancho_deseado = 440
-
-        self.resize(
-            ancho_deseado,
-            alto_deseado
-        )
-
-        # Volver a centrar respecto a la ventana principal
-        if self.parent():
-            p_geo = self.parent().geometry()
-
-            self.move(
-                p_geo.center().x() - self.width() // 2,
-                p_geo.center().y() - self.height() // 2,
-            )
     # ============================================================
     # TAB 1 — GENERAL
     # ============================================================
@@ -320,15 +248,14 @@ class DialogoPreferencias(QDialog):
             f"background-color: {COLOR_FONDO}; border: none;"
         )
         layout = QVBoxLayout(contenido)
-        layout.setContentsMargins(20, 14, 20, 14)   
+        layout.setContentsMargins(20, 14, 20, 14)
         layout.setSpacing(0)
 
         # ---- Título ----
         layout.addWidget(self._titulo_grande("Configuración general"))
-        layout.addSpacing(12)   
+        layout.addSpacing(12)
 
         # ---- Configuración ----
-                # ---- Configuración ----
         layout.addWidget(self._subtitulo("Configuración"))
         layout.addSpacing(4)
 
@@ -543,6 +470,7 @@ class DialogoPreferencias(QDialog):
         layout.addStretch()
 
         return self._con_scroll(contenido)
+
     def _on_autostart_cambiado(self, activo: bool):
         ok = autostart.aplicar(activo)
         if not ok:
@@ -552,7 +480,7 @@ class DialogoPreferencias(QDialog):
             print("[Prefs] No se pudo cambiar el auto-inicio")
 
     def _on_mostrar_al_iniciar_cambiado(self, activo: bool):
-        PS.set_bool(PS.KEY_MOSTRAR_AL_INICIAR, activo)   
+        PS.set_bool(PS.KEY_MOSTRAR_AL_INICIAR, activo)
 
     # ============================================================
     # HELPERS
@@ -712,6 +640,7 @@ class DialogoPreferencias(QDialog):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setStyleSheet(f"""
             QScrollArea {{
                 background-color: {COLOR_FONDO};
@@ -740,8 +669,7 @@ class DialogoPreferencias(QDialog):
                 height: 0;
                 background: none;
             }}
-            QScrollBar::add-page:vertical,
-            QScrollBar::sub-page:vertical {{
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
                 background: none;
             }}
         """)

@@ -1,4 +1,3 @@
-# app/ui/tracker_window.py
 from datetime import date, datetime, timedelta
 
 from PySide6.QtCore import QTimer, Qt, Signal
@@ -816,6 +815,91 @@ class TrackerWindow(QWidget):
 
     def _on_actividad_reanudada(self, segundos_inactivo: int):
         pass
+
+    # ================= RASTREADOR AUTOMÁTICO =================
+    def obtener_registros_rastreador(self):
+        """
+        Devuelve (registros, grupo) para el visor del Rastreador automático
+        (app/ui/dialogs/rastreador_auto.py).
+
+        - `registros`: lista de dicts con las claves:
+            app, descripcion, url, hora_inicio, hora_fin,
+            duracion, inactividad (0..1), color (hex)
+        - `grupo`: lista con app, uso_pct (float), total_str
+
+        ⚠️ Por ahora devuelve datos de ejemplo. Sustituye el cuerpo
+        cuando tengas la tabla / endpoint real del rastreador.
+        """
+        # ------------------------------------------------------------------
+        # TODO: Sustituir por la consulta real (BD local o API).
+        # Ejemplo si tuvieras un endpoint:
+        #
+        #   data = self.client.obtener_actividad_automatica(
+        #       fecha=date.today().isoformat()
+        #   )
+        #   return data["registros"], data["grupo"]
+        # ------------------------------------------------------------------
+        registros_demo = [
+            {
+                "app": "ClockifyWindows",
+                "descripcion": "Clockify",
+                "url": "",
+                "hora_inicio": "21:10",
+                "hora_fin": "21:10",
+                "duracion": "00:00:51",
+                "inactividad": 0.70,
+                "color": "#2196f3",
+            },
+            {
+                "app": "Microsoft Edge",
+                "descripcion": "Historias • Instagram",
+                "url": "https://www.instagram.com",
+                "hora_inicio": "21:11",
+                "hora_fin": "21:12",
+                "duracion": "00:01:20",
+                "inactividad": 0.35,
+                "color": "#2196f3",
+            },
+            {
+                "app": "dota2",
+                "descripcion": "Dota 2",
+                "url": "",
+                "hora_inicio": "21:12",
+                "hora_fin": "21:36",
+                "duracion": "00:23:25",
+                "inactividad": 0.07,
+                "color": "#b71c1c",
+            },
+            {
+                "app": "Microsoft Edge",
+                "descripcion": "Mis plataformas",
+                "url": "https://fiorprd.udm.mx",
+                "hora_inicio": "21:36",
+                "hora_fin": "21:36",
+                "duracion": "00:00:17",
+                "inactividad": 0.11,
+                "color": "#2196f3",
+            },
+            {
+                "app": "Brave",
+                "descripcion": "NinaDrama - Watch",
+                "url": "https://kick.com/ninadrama",
+                "hora_inicio": "21:42",
+                "hora_fin": "21:43",
+                "duracion": "00:00:36",
+                "inactividad": 0.36,
+                "color": "#ff6d00",
+            },
+        ]
+
+        grupo_demo = [
+            {"app": "ClockifyWindows", "uso_pct": 1.8,  "total_str": "00:00:51"},
+            {"app": "Microsoft Edge", "uso_pct": 3.4,  "total_str": "00:01:37"},
+            {"app": "dota2",          "uso_pct": 61.8, "total_str": "00:29:27"},
+            {"app": "Brave",          "uso_pct": 33.1, "total_str": "00:15:46"},
+        ]
+
+        return registros_demo, grupo_demo
 
     # ================= CIERRE =================
     def closeEvent(self, event):
