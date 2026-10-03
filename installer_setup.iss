@@ -1,6 +1,6 @@
 ; installer_setup.iss
 #define MyAppName "Control de Asistencia"
-#define MyAppVersion "1.0.3"
+#define MyAppVersion "1.0.4"
 #define MyAppPublisher "GM Ingenieros y Consultores"
 #define MyAppExeName "ControlAsistencia.exe"
 
