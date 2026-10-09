@@ -36,7 +36,7 @@ class ApiClient:
             resp = requests.request(
                 method, url,
                 headers=self._headers(),
-                timeout=60,          
+                timeout=60,
                 **kwargs,
             )
         except requests.exceptions.RequestException as e:
@@ -64,6 +64,16 @@ class ApiClient:
     def logout(self):
         self.token = None
         self.usuario = None
+
+    def registrar(self, nombre: str, apellido: str, email: str, password: str):
+        """POST /auth/registro — crea una cuenta nueva."""
+        body = {
+            "nombre": nombre,
+            "apellido": apellido,
+            "email": email,
+            "password": password,
+        }
+        return self._request("POST", "/auth/registro", json=body)
 
     # ---------------- proyectos ----------------
     def listar_proyectos(self, estado: str | None = "activo"):
@@ -195,13 +205,21 @@ class ApiClient:
             "etiqueta_id": etiqueta_id,
         }
         return self._request("POST", "/rastreador/tiempo/manual", json=body)
-        # ---------------- auth: registro ----------------
-    def registrar(self, nombre: str, apellido: str, email: str, password: str):
-        """POST /auth/registro — crea una cuenta nueva."""
-        body = {
-            "nombre": nombre,
-            "apellido": apellido,
-            "email": email,
-            "password": password,
-        }
-        return self._request("POST", "/auth/registro", json=body)
+
+    # ---------------- rastreador: actividad automática ----------------
+    def enviar_actividad(self, registros: list) -> dict:
+        """POST /rastreador/actividad/lote — envía un lote de segmentos del rastreador."""
+        return self._request(
+            "POST",
+            "/rastreador/actividad/lote",
+            json={"registros": registros},
+        )
+
+    def obtener_actividad_dia(self, fecha_iso: str) -> dict:
+        """GET /rastreador/actividad/dia?fecha=YYYY-MM-DD
+        Retorna {"registros": [...], "grupo": [...]}"""
+        return self._request(
+            "GET",
+            "/rastreador/actividad/dia",
+            params={"fecha": fecha_iso},
+        )

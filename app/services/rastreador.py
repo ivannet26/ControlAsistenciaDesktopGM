@@ -2,7 +2,7 @@ import os
 import sqlite3
 from datetime import datetime, date
 from pathlib import Path
-
+from app.services.url_activa import url_navegador_activo
 from PySide6.QtCore import QObject, QTimer, Signal
 
 # Dependencias opcionales (solo se activan en Windows)
@@ -76,9 +76,12 @@ class RastreadorDB:
         con = self._conexion()
         try:
             con.execute("PRAGMA journal_mode=WAL")
-            con.executescript("""
+
+            # 1) Crear tabla si no existe (sin el índice nuevo todavía)
+            con.execute("""
                 CREATE TABLE IF NOT EXISTS segmentos (
                     id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    usuario_id   INTEGER DEFAULT 0,
                     app          TEXT    NOT NULL,
                     titulo       TEXT,
                     descripcion  TEXT,
@@ -88,44 +91,73 @@ class RastreadorDB:
                     duracion_seg INTEGER DEFAULT 0,
                     activo       INTEGER DEFAULT 1,
                     fecha        TEXT    NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_segmentos_fecha
-                    ON segmentos(fecha);
-                CREATE INDEX IF NOT EXISTS idx_segmentos_activo
-                    ON segmentos(activo);
+                )
             """)
+
+            # 2) Si la tabla ya existía SIN usuario_id, añadirla AHORA
+            cols = {r[1] for r in con.execute("PRAGMA table_info(segmentos)")}
+            if "usuario_id" not in cols:
+                con.execute(
+                    "ALTER TABLE segmentos ADD COLUMN usuario_id INTEGER DEFAULT 0"
+                )
+
+            # 3) Ahora sí, crear los índices (la columna ya existe)
+            con.execute("""
+                CREATE INDEX IF NOT EXISTS idx_segmentos_fecha
+                    ON segmentos(fecha)
+            """)
+            con.execute("""
+                CREATE INDEX IF NOT EXISTS idx_segmentos_activo
+                    ON segmentos(activo)
+            """)
+            con.execute("""
+                CREATE INDEX IF NOT EXISTS idx_segmentos_usuario
+                    ON segmentos(usuario_id, fecha)
+            """)
+
             con.commit()
         finally:
             con.close()
-
     # ---------- Escritura ----------
-    def cerrar_segmento_activo(self, fin_iso=None):
+    def cerrar_segmento_activo(self, usuario_id=None, fin_iso=None):
         if fin_iso is None:
             fin_iso = datetime.now().isoformat(timespec="seconds")
         con = self._conexion()
         try:
-            con.execute("""
-                UPDATE segmentos
-                SET fin = ?,
-                    duracion_seg = CAST(
-                        (julianday(?) - julianday(inicio)) * 86400 AS INTEGER
-                    ),
-                    activo = 0
-                WHERE activo = 1
-            """, (fin_iso, fin_iso))
+            if usuario_id is not None:
+                con.execute("""
+                    UPDATE segmentos
+                    SET fin = ?,
+                        duracion_seg = CAST(
+                            (julianday(?) - julianday(inicio)) * 86400 AS INTEGER
+                        ),
+                        activo = 0
+                    WHERE activo = 1 AND usuario_id = ?
+                """, (fin_iso, fin_iso, int(usuario_id)))
+            else:
+                con.execute("""
+                    UPDATE segmentos
+                    SET fin = ?,
+                        duracion_seg = CAST(
+                            (julianday(?) - julianday(inicio)) * 86400 AS INTEGER
+                        ),
+                        activo = 0
+                    WHERE activo = 1
+                """, (fin_iso, fin_iso))
             con.commit()
         finally:
             con.close()
 
-    def crear_segmento(self, app, titulo, descripcion="", url=""):
+    def crear_segmento(self, usuario_id, app, titulo, descripcion="", url=""):
         ahora = datetime.now()
         con = self._conexion()
         try:
             cur = con.execute("""
                 INSERT INTO segmentos
-                    (app, titulo, descripcion, url, inicio, activo, fecha)
-                VALUES (?, ?, ?, ?, ?, 1, ?)
+                    (usuario_id, app, titulo, descripcion, url, inicio, activo, fecha)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?)
             """, (
+                int(usuario_id or 0),
                 app, titulo or "", descripcion or "", url or "",
                 ahora.isoformat(timespec="seconds"),
                 ahora.date().isoformat(),
@@ -151,15 +183,27 @@ class RastreadorDB:
             con.close()
 
     # ---------- Lectura ----------
-    def obtener_segmentos(self, fecha_iso):
+    def obtener_segmentos(self, usuario_id, fecha_iso):
         con = self._conexion()
         try:
             cur = con.execute("""
                 SELECT * FROM segmentos
-                WHERE fecha = ?
+                WHERE usuario_id = ? AND fecha = ?
                 ORDER BY inicio ASC
-            """, (fecha_iso,))
+            """, (int(usuario_id or 0), fecha_iso))
             return [dict(r) for r in cur.fetchall()]
+        finally:
+            con.close()
+
+    def obtener_segmento_por_id(self, seg_id):
+        """Devuelve un segmento por su ID, o None si no existe."""
+        con = self._conexion()
+        try:
+            cur = con.execute(
+                "SELECT * FROM segmentos WHERE id = ?", (seg_id,)
+            )
+            fila = cur.fetchone()
+            return dict(fila) if fila else None
         finally:
             con.close()
 
@@ -230,21 +274,24 @@ class RastreadorAuto(QObject):
         self.rastreador.detener()   # cierra el último segmento y para
 
     Señales:
-        segmento_cerrado(dict)  → cada vez que se cierra un segmento
+        segmento_cerrado(dict)  → cada vez que se cierra un segmento,
+                                   con TODOS los datos del segmento
         error(str)              → si falla algo irrecuperable
     """
 
     segmento_cerrado = Signal(dict)
     error = Signal(str)
 
-    def __init__(self, intervalo_seg=5, parent=None):
+    def __init__(self, usuario_id=None, intervalo_seg=5, parent=None):
         super().__init__(parent)
+        self.usuario_id = int(usuario_id or 0)
         self.db = RastreadorDB()
         self.intervalo_seg = max(1, int(intervalo_seg))
         self._activo = False
         self._app_actual = None
         self._titulo_actual = None
         self._id_segmento = None
+        self._url_actual = ""
 
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._muestrear)
@@ -258,14 +305,11 @@ class RastreadorAuto(QObject):
         if self._activo:
             return
         if not _WIN_AVAILABLE:
-            self.error.emit(
-                "Faltan dependencias: instala 'pywin32' y 'psutil'."
-            )
+            self.error.emit("Faltan dependencias: instala 'pywin32' y 'psutil'.")
             return
-        # Cerramos cualquier segmento huérfano de una sesión anterior
-        self.db.cerrar_segmento_activo()
+        self.db.cerrar_segmento_activo(self.usuario_id)
         self._activo = True
-        self._muestrear()                       # primer muestreo inmediato
+        self._muestrear()
         self._timer.start(self.intervalo_seg * 1000)
 
     def detener(self):
@@ -273,10 +317,11 @@ class RastreadorAuto(QObject):
             return
         self._activo = False
         self._timer.stop()
-        self.db.cerrar_segmento_activo()
+        self.db.cerrar_segmento_activo(self.usuario_id)
         self._app_actual = None
         self._titulo_actual = None
         self._id_segmento = None
+        self._url_actual = ""
 
     def set_intervalo(self, seg: int):
         self.intervalo_seg = max(1, int(seg))
@@ -286,52 +331,66 @@ class RastreadorAuto(QObject):
     # ---------- Muestreo ----------
     def _muestrear(self):
         app, titulo = _ventana_activa()
-
-        # DEBUG: ver qué ve realmente el rastreador
         print(f"[Rastreador] app={app!r} | titulo={titulo!r} | prev={self._app_actual!r}")
 
         if not app:
             return
 
-        # ─── Caso: app ignorada (el propio visor) ───
         if app in APPS_IGNORADAS:
-            # Cerramos el segmento activo para que no crezca mientras
-            # miras tu propia app. Cuando vuelvas a otra, se abrirá uno nuevo.
             if self._id_segmento is not None:
-                print(f"[Rastreador] IGNORADA → cerrando segmento {self._id_segmento}")
-                self.db.cerrar_segmento_activo()
-                try:
-                    self.segmento_cerrado.emit({"id": self._id_segmento})
-                except Exception:
-                    pass
+                self.db.cerrar_segmento_activo(self.usuario_id)
+                seg = self.db.obtener_segmento_por_id(self._id_segmento)
+                if seg:
+                    try:
+                        self.segmento_cerrado.emit(seg)
+                    except Exception as e:
+                        print(f"[Rastreador] Error emitiendo: {e}")
                 self._app_actual = None
                 self._titulo_actual = None
                 self._id_segmento = None
+                self._url_actual = ""
             return
 
-        # ─── Sin cambio → solo refrescamos duración ───
-        if app == self._app_actual and titulo == self._titulo_actual:
+        # Capturar URL real si es navegador
+        url_real = ""
+        if app in NAVEGADORES_CONOCIDOS:
+            try:
+                url_real = url_navegador_activo() or ""
+            except Exception:
+                url_real = ""
+
+        # Sin cambio
+        if (
+            app == self._app_actual
+            and titulo == self._titulo_actual
+            and url_real == self._url_actual
+        ):
             self.db.actualizar_duracion_activa()
             return
 
-        # ─── Cambio → cerramos anterior y abrimos nuevo ───
+        # Cambio → cerramos anterior
         if self._id_segmento is not None:
-            self.db.cerrar_segmento_activo()
-            try:
-                self.segmento_cerrado.emit({"id": self._id_segmento})
-            except Exception:
-                pass
+            self.db.cerrar_segmento_activo(self.usuario_id)
+            seg = self.db.obtener_segmento_por_id(self._id_segmento)
+            if seg:
+                try:
+                    self.segmento_cerrado.emit(seg)
+                except Exception as e:
+                    print(f"[Rastreador] Error emitiendo: {e}")
 
+        # Nuevo segmento CON usuario_id
         descripcion = self._descripcion_amigable(app, titulo)
         self._app_actual = app
         self._titulo_actual = titulo
+        self._url_actual = url_real
         self._id_segmento = self.db.crear_segmento(
+            usuario_id=self.usuario_id,   # 🔑
             app=app,
             titulo=titulo,
             descripcion=descripcion,
-            url="",
+            url=url_real,
         )
-        print(f"[Rastreador] NUEVO segmento {self._id_segmento} → {app} | {titulo[:50]}")
+        print(f"[Rastreador] NUEVO segmento {self._id_segmento} → {app} | {titulo[:40]} | URL={url_real[:60]}")
 
     def _descripcion_amigable(self, app: str, titulo: str) -> str:
         """'chrome.exe' + 'Instagram - Google Chrome' → 'Instagram'."""
@@ -362,4 +421,4 @@ class RastreadorAuto(QObject):
     def registros_por_dia(self, fecha_iso=None):
         if fecha_iso is None:
             fecha_iso = date.today().isoformat()
-        return self.db.obtener_segmentos(fecha_iso)
+        return self.db.obtener_segmentos(self.usuario_id, fecha_iso)

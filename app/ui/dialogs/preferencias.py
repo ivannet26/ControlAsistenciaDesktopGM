@@ -96,8 +96,10 @@ class TabButton(QPushButton):
 class FilaAjuste(QWidget):
     def __init__(self, etiqueta, control, parent=None):
         super().__init__(parent)
+        self._control = control
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet("background: transparent; border: none;")
+        self.setCursor(Qt.PointingHandCursor)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 3, 0, 3)
@@ -110,10 +112,16 @@ class FilaAjuste(QWidget):
             "background: transparent; border: none;"
         )
         self.label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        layout.addWidget(self.label, 1)
+        self.label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
 
+        layout.addWidget(self.label, 1)
         layout.addWidget(control, 0, Qt.AlignVCenter)
 
+    def mousePressEvent(self, event):
+       
+        if event.button() == Qt.LeftButton and self._control is not None:
+            self._control.toggle()
+        super().mousePressEvent(event)
 
 # ============================================================
 # DIÁLOGO DE PREFERENCIAS
@@ -291,7 +299,7 @@ class DialogoPreferencias(QDialog):
         # ---- Actualizaciones ----
         layout.addWidget(self._subtitulo("Actualizaciones"))
         layout.addSpacing(2)
-        layout.addWidget(self._descripcion("Versión de la aplicación 2.3.1"))
+        layout.addWidget(self._descripcion("Versión de la aplicación 1.0.5"))
 
         layout.addSpacing(12)
         layout.addWidget(self._divisor())

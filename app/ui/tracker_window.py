@@ -46,7 +46,7 @@ INTERVALO_PING_MS = 60_000
 INTERVALO_RASTREADOR_SEG = 2
 
 # Ventana máxima hacia atrás para asociar una URL a un segmento (segundos)
-VENTANA_URL_MAX_SEG = 1800
+VENTANA_URL_MAX_SEG = 300
 
 # Claves de preferencias (con valor por defecto por si aún no existen en PS)
 KEY_MOSTRAR_AL_TIMER_WEB = getattr(
@@ -54,12 +54,6 @@ KEY_MOSTRAR_AL_TIMER_WEB = getattr(
 )
 KEY_SIEMPRE_VISIBLE = getattr(PS, "KEY_SIEMPRE_VISIBLE", "siempre_visible")
 KEY_SIN_CONEXION = getattr(PS, "KEY_SIN_CONEXION", "sin_conexion")
-
-
-# Claves del rastreador automático (usar las de PS)
-# KEY_RASTREADOR_ACTIVAR  → PS.KEY_RASTREADOR_ACTIVAR
-# KEY_RASTREADOR_AUTO_START → PS.KEY_RASTREADOR_AUTO_START
-# KEY_RASTREADOR_URLS → PS.KEY_RASTREADOR_URLS
 
 # Mensajes cuando el temporizador se detiene por eventos del sistema
 MENSAJES_ENERGIA = {
@@ -83,11 +77,11 @@ class TrackerWindow(QWidget):
         self._entrada_actual = None
 
         # Estado del heartbeat / cierre / inactividad
-        self._ocupado = False            # True mientras hay una acción local en curso
-        self._hb_en_curso = False        # evita consultas solapadas
-        self._cerrando_real = False      # True solo al cerrar sesión o "Salir"
-        self._forzar_detencion = False   # True si el modal de inactividad expiró
-        self._motivo_energia = ""        # bloqueo / reposo / apagado
+        self._ocupado = False
+        self._hb_en_curso = False
+        self._cerrando_real = False
+        self._forzar_detencion = False
+        self._motivo_energia = ""
 
         # Cache
         self._proyectos = []
@@ -96,20 +90,17 @@ class TrackerWindow(QWidget):
 
         self.setWindowTitle(f"Control de Asistencia - {usuario.get('nombre', '')}")
         self.setWindowFlag(Qt.FramelessWindowHint)
-        # Elimina el borde fantasma de Windows
         self.setAttribute(Qt.WA_TranslucentBackground)
 
         self.resize(420, 600)
         self.setMinimumWidth(380)
         self.setMinimumHeight(480)
-        # NO aplicar setStyleSheet aquí
 
         self._armar_ui()
 
         self.reloj = QTimer(self)
         self.reloj.timeout.connect(self._tick)
 
-        # Monitor de inactividad (el umbral se relee cada vez que arranca un timer)
         self.monitor_inactividad = None
         self._preparar_monitor_inactividad()
 
@@ -119,30 +110,22 @@ class TrackerWindow(QWidget):
         self._precargar_proyectos()
         self._precargar_etiquetas()
 
-        # Heartbeat: detecta timers iniciados/detenidos desde la web.
-        # Arranca aquí (no en showEvent) para correr aunque la ventana esté oculta.
         self.heartbeat = QTimer(self)
         self.heartbeat.timeout.connect(self._heartbeat)
         self.heartbeat.start(INTERVALO_HEARTBEAT_MS)
 
-        # Ping de vida: el servidor cierra el timer si dejan de llegar pings
         self.ping_timer = QTimer(self)
         self.ping_timer.timeout.connect(self._ping)
         self.ping_timer.start(INTERVALO_PING_MS)
 
-        # Recordatorios: avisan por la notificación de Windows si no hay timer activo.
-        # La bandeja se conecta desde main.py con self.recordatorios.set_tray(tray)
         self.recordatorios = ServicioRecordatorios(
             lambda: self.registro_activo is not None,
             parent=self,
         )
 
-        # Preferencia "Mantener la aplicación siempre visible"
         if PS.get_bool(KEY_SIEMPRE_VISIBLE, False):
             self.aplicar_siempre_visible(True)
 
-        # Bloqueo de pantalla, reposo y apagado (según Control de tiempo).
-        # Va después de aplicar_siempre_visible: cambiar flags recrea la ventana nativa.
         self.energia = MonitorEnergia(int(self.winId()), self)
         self.energia.detener.connect(self._detener_por_energia)
 
@@ -150,14 +133,15 @@ class TrackerWindow(QWidget):
         # RASTREADOR AUTOMÁTICO
         # ============================================================
         self.rastreador = RastreadorAuto(
-            intervalo_seg=INTERVALO_RASTREADOR_SEG, parent=self
+            usuario_id=self.usuario.get("id"),
+            intervalo_seg=INTERVALO_RASTREADOR_SEG,
+            parent=self,
         )
         self.rastreador.segmento_cerrado.connect(self._on_segmento_cerrado)
         self.rastreador.error.connect(
             lambda msg: self._mostrar_mensaje(f"[Rastreador] {msg}", "error")
         )
 
-        # Arrancarlo si la preferencia está activa
         activar = (
             PS.get_bool(PS.KEY_RASTREADOR_AUTO_START, False)
             or PS.get_bool(PS.KEY_RASTREADOR_ACTIVAR, False)
@@ -177,7 +161,6 @@ class TrackerWindow(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Barra personalizada (blanca)
         self.title_bar = CustomTitleBar(
             self,
             f"Control de Asistencia - {self.usuario.get('nombre', '')}",
@@ -185,11 +168,9 @@ class TrackerWindow(QWidget):
         )
         layout.addWidget(self.title_bar)
 
-        # Contenedor con fondo oscuro del tracker
         contenido = QWidget()
         contenido.setObjectName("contenidoTracker")
         contenido.setAttribute(Qt.WA_StyledBackground, True)
-        # Extraer solo el background del QSS del tracker
         contenido.setStyleSheet(
             "QWidget#contenidoTracker { background-color: #0d181f; }"
         )
@@ -295,7 +276,6 @@ class TrackerWindow(QWidget):
         if not self.registro_activo:
             self.entrada_box.set_estado(EntradaBox.ESTADO_LISTO)
 
-    # -------- Helpers de chips --------
     def _crear_chip(self, texto: str, qss: str, texto_completo: str = "") -> QLabel:
         label = QLabel(self._acortar(texto))
         label.setStyleSheet(qss)
@@ -387,24 +367,21 @@ class TrackerWindow(QWidget):
         return PS.get_bool(KEY_SIN_CONEXION, False)
 
     def aplicar_siempre_visible(self, activo: bool):
-        """Llamado desde Preferencias: la ventana queda por encima de las demás."""
         estaba_visible = self.isVisible()
         self.setWindowFlag(Qt.WindowStaysOnTopHint, activo)
         if estaba_visible:
-            self.show()   # cambiar flags oculta la ventana; hay que mostrarla otra vez
+            self.show()
 
     def aplicar_sin_conexion(self, activo: bool):
-        """Llamado desde Preferencias: pausa o reanuda la sincronización."""
         if activo:
             self._mostrar_mensaje(
                 "Modo sin conexión: no se detectan timers de la web.", "error"
             )
         else:
             self._mostrar_mensaje("Conexión restablecida.", "success")
-            self._heartbeat()   # sincroniza al instante
+            self._heartbeat()
 
     def aplicar_rastreador_activo(self, activo: bool):
-        """Llamado desde Preferencias para arrancar/parar el rastreador en caliente."""
         if activo and not self.rastreador.activo:
             self.rastreador.iniciar()
         elif not activo and self.rastreador.activo:
@@ -412,7 +389,6 @@ class TrackerWindow(QWidget):
 
     # ================= CARGA DE DATOS =================
     def _limpiar_workers(self):
-        """Quita de la lista los workers ya terminados (el heartbeat crea uno cada 5 s)."""
         self._workers = [w for w in self._workers if not w.isFinished()]
 
     def _lanzar(self, funcion, on_exito, *args, **kwargs):
@@ -424,9 +400,8 @@ class TrackerWindow(QWidget):
         worker.start()
 
     def _on_error_worker(self, mensaje: str):
+        print(f"[API] ❌ Error del worker: {mensaje}")
         self._ocupado = False
-        # Si falló una parada/ajuste, el timer sigue activo en el servidor:
-        # reanudar el reloj local para que la pantalla no quede congelada.
         if self.registro_activo and not self.reloj.isActive():
             self.reloj.start(1000)
         self._mostrar_mensaje(mensaje, "error")
@@ -590,7 +565,7 @@ class TrackerWindow(QWidget):
             self._mostrar_mensaje("Selecciona un proyecto.", "error")
             return
 
-        self._ocupado = True   # el heartbeat no interfiere mientras se inicia
+        self._ocupado = True
         self._lanzar(
             self.client.iniciar_temporizador,
             self._on_iniciado,
@@ -611,13 +586,13 @@ class TrackerWindow(QWidget):
         self.monitor_inactividad.iniciar()
 
     def _detener(self):
-        self._ocupado = True   # el heartbeat no interfiere mientras se detiene
+        self._ocupado = True
         self.reloj.stop()
         self._lanzar(self.client.detener_temporizador, self._on_detenido)
 
     def _on_detenido(self, registro):
         self._ocupado = False
-        self.reloj.stop()   # necesario cuando se detiene desde la web
+        self.reloj.stop()
         if self.monitor_inactividad:
             self.monitor_inactividad.detener()
         self.registro_activo = None
@@ -644,7 +619,6 @@ class TrackerWindow(QWidget):
         worker.start()
 
     def _on_heartbeat_error(self, _mensaje):
-        # Sin red o servidor dormido: se reintenta en el próximo ciclo, sin avisos
         self._hb_en_curso = False
 
     def _on_heartbeat(self, registro):
@@ -655,13 +629,10 @@ class TrackerWindow(QWidget):
         activo_id = self.registro_activo.get("id") if self.registro_activo else None
 
         if registro and registro.get("id") != activo_id:
-            # Timer iniciado (o cambiado) desde la web
             self._on_temporizador_activo(registro)
-            # Solo mostrar la ventana si el usuario lo permite
             if PS.get_bool(KEY_MOSTRAR_AL_TIMER_WEB, True):
                 self._traer_al_frente()
         elif not registro and self.registro_activo:
-            # Timer detenido desde la web
             self._on_detenido(None)
             self._mostrar_mensaje("Temporizador detenido desde la web.", "success")
 
@@ -670,16 +641,14 @@ class TrackerWindow(QWidget):
         self.showNormal()
         self.raise_()
         self.activateWindow()
-        QApplication.alert(self, 0)   # parpadea en la barra si Windows no da foco
+        QApplication.alert(self, 0)
 
     # ================= PING DE VIDA =================
     def _ping(self):
-        """Avisa al servidor que el timer sigue vivo (para cierre automático si se apaga la PC)."""
         if not self.registro_activo or self._cerrando_real:
             return
         if self._sin_conexion():
             return
-        # Requiere ApiClient.ping_temporizador(registro_id); si aún no existe, no hace nada
         if not hasattr(self.client, "ping_temporizador"):
             return
         self._limpiar_workers()
@@ -687,24 +656,18 @@ class TrackerWindow(QWidget):
             self.client.ping_temporizador, self.registro_activo.get("id")
         )
         worker.exito.connect(lambda _: None)
-        worker.error.connect(lambda _: None)   # sin red: se reintenta al minuto
+        worker.error.connect(lambda _: None)
         self._workers.append(worker)
         worker.start()
 
     # ================= BLOQUEO / REPOSO / APAGADO =================
     def _detener_por_energia(self, motivo: str, segundos_perdidos: int):
-        """
-        Lo dispara MonitorEnergia solo si la preferencia está activada.
-        - bloqueo / apagado: se detiene directamente.
-        - reposo: primero se descuentan los segundos que el equipo estuvo dormido
-          y luego se detiene.
-        """
         if not self.registro_activo or self._ocupado or self._cerrando_real:
             return
         if self._sin_conexion():
             return
 
-        self._ocupado = True   # el heartbeat no interfiere
+        self._ocupado = True
         self._motivo_energia = motivo
         self.reloj.stop()
 
@@ -730,7 +693,7 @@ class TrackerWindow(QWidget):
         )
 
     def _on_detenido_por_energia(self, registro):
-        self._on_detenido(registro)   # limpia estado y libera _ocupado
+        self._on_detenido(registro)
         self._mostrar_mensaje(
             MENSAJES_ENERGIA.get(
                 self._motivo_energia, "El temporizador se detuvo."
@@ -741,11 +704,6 @@ class TrackerWindow(QWidget):
 
     # ================= INACTIVIDAD =================
     def _preparar_monitor_inactividad(self):
-        """
-        Crea el monitor con el umbral guardado en preferencias.
-        Se llama cada vez que arranca un timer, así los cambios del panel
-        aplican sin reiniciar la app.
-        """
         anterior = self.monitor_inactividad
         if anterior is not None:
             try:
@@ -773,7 +731,7 @@ class TrackerWindow(QWidget):
 
     def _on_inactividad_detectada(self, segundos_inactivo: int):
         import time
-        self._ocupado = True   # pausa el heartbeat mientras el modal está abierto
+        self._ocupado = True
         self._forzar_detencion = False
         self.reloj.stop()
         self._inicio_inactividad = self.monitor_inactividad.ultima_actividad
@@ -790,9 +748,6 @@ class TrackerWindow(QWidget):
             segundos_inactivo_inicial=segundos_inactivo,
         )
 
-        # Corte automático: si nadie responde, cerrar el modal y detener.
-        # El límite (en minutos, contado desde que empezó la inactividad)
-        # lo define el administrador en Preferencias.
         limite_seg = max(1, leer_int("inact_limite_min")) * 60
         restante_ms = max(0, limite_seg - segundos_inactivo) * 1000
         corte = QTimer(self)
@@ -811,7 +766,6 @@ class TrackerWindow(QWidget):
         segundos_totales = int(time.time() - self._inicio_inactividad)
 
         if self.registro_activo:
-            # _ocupado se libera en _on_tiempo_ajustado, en _on_detenido o en _on_error_worker
             callback = (
                 self._on_tiempo_ajustado_y_detener
                 if self._forzar_detencion
@@ -844,7 +798,6 @@ class TrackerWindow(QWidget):
         )
 
     def _on_tiempo_ajustado_y_detener(self, registro_actualizado):
-        # Ya se descontó el tiempo inactivo: ahora se detiene el timer
         if registro_actualizado:
             self.registro_activo = registro_actualizado
         self._lanzar(
@@ -853,7 +806,7 @@ class TrackerWindow(QWidget):
         )
 
     def _on_detenido_por_inactividad(self, registro):
-        self._on_detenido(registro)   # limpia estado y libera _ocupado
+        self._on_detenido(registro)
         self._mostrar_mensaje(
             "El temporizador se detuvo por inactividad prolongada.", "error"
         )
@@ -862,10 +815,48 @@ class TrackerWindow(QWidget):
         pass
 
     # ================= RASTREADOR AUTOMÁTICO =================
-    def _on_segmento_cerrado(self, _info):
-        """Callback cuando el rastreador cierra un segmento (app cambió)."""
-        # No hacemos nada por ahora; el visor lee la BD bajo demanda.
-        pass
+    def _on_segmento_cerrado(self, info):
+        """
+        El rastreador emite el SEGMENTO COMPLETO (dict) al cerrarlo.
+        Si el toggle está ON, lo enviamos al backend.
+        """
+        print(f"[Rastreador] _on_segmento_cerrado: {info}")
+
+        auto = PS.get_bool(PS.KEY_RASTREADOR_AUTO_START, False)
+        activar = PS.get_bool(PS.KEY_RASTREADOR_ACTIVAR, False)
+        if not (auto or activar):
+            print("[Rastreador] Toggle OFF → no envío")
+            return
+
+        if not hasattr(self.client, "enviar_actividad"):
+            print("[Rastreador] ⚠️ client.enviar_actividad NO existe")
+            return
+
+        app_lower = (info.get("app") or "").lower()
+        payload = {
+            "aplicacion": info.get("app") or "desconocido",
+            "descripcion": info.get("descripcion") or info.get("titulo") or "",
+            "url": info.get("url") or None,
+            "hora_inicio": info.get("inicio"),
+            "hora_fin": info.get("fin"),
+            "duracion_segundos": int(info.get("duracion_seg") or 0),
+            "inactividad_pct": 0.0,
+            "color": COLORES_POR_APP.get(app_lower, COLOR_POR_DEFECTO),
+        }
+
+        print(f"[Rastreador] → Enviando: {payload}")
+
+        try:
+            self._lanzar(
+                self.client.enviar_actividad,
+                self._on_actividad_enviada,
+                registros=[payload],
+            )
+        except Exception as e:
+            print(f"[Rastreador] ❌ Error enviando: {e}")
+
+    def _on_actividad_enviada(self, resp):
+        print(f"[Rastreador] ✅ Enviado al backend: {resp}")
 
     # -------- Helpers de formato --------
     @staticmethod
@@ -889,14 +880,11 @@ class TrackerWindow(QWidget):
     def _url_para_segmento(self, historial, inicio_iso, fin_iso, navegador_exe,
                            ventana_max_seg=VENTANA_URL_MAX_SEG):
         """
-        Devuelve la URL "activa" durante un segmento de navegador.
+        Devuelve la URL 'activa' durante un segmento de navegador.
 
-        Estrategia:
-          1. Buscar la última visita ANTES o DURANTE el segmento
-             (máx `ventana_max_seg` atrás).
-          2. Si no hay nada en esa ventana, coger la última visita
-             del navegador antes del segmento (sin límite). Así pestañas
-             abiertas hace rato también enganchan su URL.
+        Regla estricta: solo acepta visitas que caigan DENTRO del segmento
+        (o como mucho `ventana_max_seg` segundos ANTES de su inicio).
+        Si no hay visita cercana, devuelve None → mejor vacío que URL incorrecta.
         """
         if not historial or not inicio_iso:
             return None
@@ -906,6 +894,10 @@ class TrackerWindow(QWidget):
             fin = datetime.fromisoformat(fin_iso) if fin_iso else datetime.now()
         except (ValueError, TypeError):
             return None
+
+        # Normalizamos a naive (sin tzinfo) para comparar contra el historial
+        ini_naive = ini.replace(tzinfo=None) if ini.tzinfo else ini
+        fin_naive = fin.replace(tzinfo=None) if fin.tzinfo else fin
 
         mapa_exe = {
             "chrome.exe":  ("chrome",),
@@ -917,10 +909,12 @@ class TrackerWindow(QWidget):
         }
         aceptados = mapa_exe.get(navegador_exe, ())
 
-        limite_inferior = ini - timedelta(seconds=ventana_max_seg)
+        # Tolerancia ANTES del inicio (por delay del historial)
+        limite_inferior = ini_naive - timedelta(seconds=ventana_max_seg)
+        # Tolerancia DESPUÉS del fin
+        limite_superior = fin_naive + timedelta(seconds=15)
 
-        candidatas = []     # dentro de la ventana
-        todas_antes = []    # antes del segmento, sin límite (fallback)
+        candidatas = []
 
         for v in historial:
             if aceptados and v.get("navegador") not in aceptados:
@@ -928,62 +922,46 @@ class TrackerWindow(QWidget):
             fv = v.get("fecha")
             if not isinstance(fv, datetime):
                 continue
+
             fv_naive = fv.replace(tzinfo=None) if fv.tzinfo else fv
-            ini_naive = ini.replace(tzinfo=None) if ini.tzinfo else ini
-            fin_naive = fin.replace(tzinfo=None) if fin.tzinfo else fin
 
-            if limite_inferior <= fv_naive <= fin_naive:
+            if limite_inferior <= fv_naive <= limite_superior:
                 candidatas.append((fv_naive, v))
-            elif fv_naive < ini_naive:
-                todas_antes.append((fv_naive, v))
 
-        # 1) Mejor candidata dentro de la ventana
-        if candidatas:
-            candidatas.sort(key=lambda x: x[0], reverse=True)
-            return candidatas[0][1]
+        if not candidatas:
+            return None
 
-        # 2) Fallback: última visita ANTES del segmento, sin límite
-        if todas_antes:
-            todas_antes.sort(key=lambda x: x[0], reverse=True)
-            return todas_antes[0][1]
+        # Priorizar la visita MÁS CERCANA al inicio del segmento
+        def _distancia(item):
+            delta = (item[0] - ini_naive).total_seconds()
+            return abs(delta)
 
-        return None
-
+        candidatas.sort(key=_distancia)
+        return candidatas[0][1]
     # -------- Método principal --------
     def obtener_registros_rastreador(self, fecha_iso=None):
         if fecha_iso is None:
             fecha_iso = date.today().isoformat()
 
-        print(f"[DEBUG] obtener_registros_rastreador(fecha_iso={fecha_iso!r})")
+        uid = self.usuario.get("id")
 
-        # Refrescamos la duración del segmento activo (si sigue corriendo)
         try:
             self.rastreador.db.actualizar_duracion_activa()
         except Exception:
             pass
 
-        # 1) Segmentos de apps desde la BD
         try:
-            segmentos = self.rastreador.db.obtener_segmentos(fecha_iso)
-            print(f"[DEBUG] BD devolvió {len(segmentos)} segmentos")
+            segmentos = self.rastreador.db.obtener_segmentos(uid, fecha_iso)
+            print(f"[DEBUG] BD local (usuario {uid}) devolvió {len(segmentos)} segmentos")
         except Exception as e:
-            print(f"[Rastreador] Error leyendo segmentos: {e}")
+            print(f"[Rastreador] Error leyendo segmentos locales: {e}")
             segmentos = []
-
-        # 2) Historial del navegador para ese día
         try:
             fecha_obj = datetime.fromisoformat(fecha_iso).date()
         except (ValueError, TypeError):
             fecha_obj = date.today()
 
-        historial = []
-        if NH.disponible() and PS.get_bool(PS.KEY_RASTREADOR_URLS, False):
-            try:
-                historial = NH.obtener_historial(fecha=fecha_obj)
-            except Exception as e:
-                print(f"[Rastreador] Error leyendo historial navegador: {e}")
 
-        # 3) Fusionar
         registros = []
         for seg in segmentos:
             app = (seg.get("app") or "").lower()
@@ -999,13 +977,9 @@ class TrackerWindow(QWidget):
             es_navegador = app in NAVEGADORES_CONOCIDOS
 
             if es_navegador:
-                # URL del historial (SOLO la columna URL)
-                visita = self._url_para_segmento(
-                    historial, inicio_iso, fin_iso, app
-                )
-                # Descripción: SIEMPRE del segmento (título real de la ventana)
+                # URL guardada directamente en el segmento (capturada en vivo)
+                url_seg = seg.get("url") or ""
                 desc_seg = seg.get("descripcion") or seg.get("titulo") or ""
-                url_seg = visita.get("url", "") if visita else ""
 
                 registros.append({
                     "app": NAVEGADORES_CONOCIDOS[app],
@@ -1029,16 +1003,13 @@ class TrackerWindow(QWidget):
                     "color": color,
                 })
 
-        # Ordenar por hora de inicio
         registros.sort(key=lambda r: (r["hora_inicio"] == "—", r["hora_inicio"]))
 
-        # 4) Vista de grupo (uso % por app)
         grupo = self._construir_grupo(segmentos)
         print(f"[DEBUG] Construidos {len(registros)} registros finales")
         return registros, grupo
 
     def _construir_grupo(self, segmentos):
-        """Agrupa por app y calcula % de uso y total."""
         acumulado = {}
         total_global = 0
         for seg in segmentos:
@@ -1063,13 +1034,11 @@ class TrackerWindow(QWidget):
 
     # ================= CIERRE =================
     def closeEvent(self, event):
-        # La X solo oculta: la app sigue en la bandeja con el heartbeat activo
         if not self._cerrando_real:
             event.ignore()
             self.hide()
             return
 
-        # Cierre real (cerrar sesión o "Salir" de la bandeja)
         if hasattr(self, "heartbeat"):
             self.heartbeat.stop()
         if hasattr(self, "ping_timer"):

@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <style>
+      @page {
+        size: A4 portrait;
+        margin: 3.5cm 1cm 1.5cm 1cm;
+
+        /* HEADER en cada página */
+        @frame header_frame {
+          -pdf-frame-content: header_content;
+          left: 1cm;
+          top: 0.8cm;
+          width: 19cm;
+          height: 2.5cm;
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: Helvetica, Arial, sans-serif;
+        font-size: 9.5px;
+        color: #333;
+        margin: 0;
+        padding: 0;
+        line-height: 1.35;
+      }
+
+      /* El header va fuera del flujo normal */
+      #header_content {
+        border-bottom: 2px solid #3d4a52;
+        padding-bottom: 6px;
+      }
+      #header_content table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      #header_content td {
+        vertical-align: middle;
+      }
+      #header_content .logo-cell {
+        text-align: left;
+      }
+      #header_content .logo-cell img {
+        height: 50px;
+        width: auto;
+      }
+      #header_content .iso-cell {
+        text-align: right;
+      }
+      #header_content .iso-cell img {
+        height: 50px;
+        width: auto;
+      }
+
+      /* CONTENIDO PRINCIPAL */
+      .titulo-informe {
+        text-align: center;
+        margin: 0 0 16px 0;
+        padding: 8px 0;
+        border-top: 1px solid #ddd;
+        border-bottom: 1px solid #ddd;
+      }
+      .titulo-informe h1 {
+        font-size: 14px;
+        color: #3d4a52;
+        margin: 0;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+      }
+
+      .seccion-titulo {
+        font-size: 10px;
+        font-weight: bold;
+        color: #2a343a;
+        background: #eef1f3;
+        border-left: 4px solid #3d4a52;
+        padding: 6px 10px;
+        margin: 14px 0 8px 0;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      table.info {
+        width: 100%;
+        border-collapse: collapse;
+        border: 1px solid #d5d5d5;
+      }
+      table.info td {
+        padding: 7px 12px;
+        font-size: 9.5px;
+        border-bottom: 1px solid #eee;
+      }
+      table.info tr:last-child td {
+        border-bottom: none;
+      }
+      table.info td.label {
+        background: #f7f7f7;
+        color: #555;
+        width: 110px;
+        font-weight: bold;
+        border-right: 1px solid #d5d5d5;
+      }
+
+      table.resumen {
+        width: 100%;
+        border-collapse: collapse;
+        border: 1px solid #d5d5d5;
+        table-layout: fixed;
+      }
+      table.resumen td {
+        padding: 12px 8px;
+        text-align: center;
+        border-right: 1px solid #d5d5d5;
+        background: #fafbfb;
+        vertical-align: middle;
+      }
+      table.resumen td:last-child {
+        border-right: none;
+      }
+      table.resumen .label {
+        color: #666;
+        font-size: 8px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 4px;
+      }
+      table.resumen .valor {
+        font-size: 13px;
+        font-weight: bold;
+        color: #3d4a52;
+      }
+
+      table.data {
+        width: 100%;
+        border-collapse: collapse;
+        border: 1px solid #d5d5d5;
+        table-layout: fixed;
+      }
+      table.data thead th {
+        background: #3d4a52;
+        color: white;
+        padding: 7px 8px;
+        text-align: left;
+        font-size: 8.5px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        border-right: 1px solid #2f3a41;
+        word-wrap: break-word;
+      }
+      table.data thead th:last-child {
+        border-right: none;
+      }
+      table.data tbody td {
+        padding: 6px 8px;
+        border-bottom: 1px solid #eee;
+        font-size: 9px;
+        color: #333;
+        word-wrap: break-word;
+        overflow: hidden;
+      }
+      table.data tbody tr:nth-child(even) {
+        background: #fafafa;
+      }
+      table.data tfoot td {
+        background: #eef1f3;
+        color: #2a343a;
+        font-weight: bold;
+        padding: 7px 8px;
+        font-size: 9.5px;
+        border-top: 2px solid #3d4a52;
+      }
+
+      .text-right {
+        text-align: right;
+      }
+      .text-center {
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- HEADER (se repite en cada página) -->
+    <div id="header_content">
+      <table>
+        <tr>
+          <td class="logo-cell"><img src="{{ logo_data }}" alt="GM" /></td>
+          <td class="iso-cell"><img src="{{ iso_data }}" alt="GM" /></td>
+        </tr>
+      </table>
+    </div>
+
+    <!-- CONTENIDO -->
+    <div class="titulo-informe">
+      <h1>Informe del rastreador automático</h1>
+    </div>
+
+    <!-- 1. DATOS GENERALES -->
+    <div class="seccion-titulo">1. Datos generales</div>
+    <table class="info">
+      <tr>
+        <td class="label">Usuario</td>
+        <td>{{ usuario_nombre }}</td>
+        <td class="label">Fecha</td>
+        <td>{{ fecha }}</td>
+      </tr>
+      <tr>
+        <td class="label">Email</td>
+        <td>{{ usuario_email }}</td>
+        <td class="label">Emisión</td>
+        <td>{{ fecha_generacion }}</td>
+      </tr>
+    </table>
+
+    <!-- 2. RESUMEN -->
+    <div class="seccion-titulo">2. Resumen ejecutivo</div>
+    <table class="resumen">
+      <tr>
+        <td style="width: 25%">
+          <div class="label">Tiempo total</div>
+          <div class="valor">{{ tiempo_total_formateado }}</div>
+        </td>
+        <td style="width: 25%">
+          <div class="label">Registros</div>
+          <div class="valor">{{ total_actividades }}</div>
+        </td>
+        <td style="width: 25%">
+          <div class="label">Aplicaciones</div>
+          <div class="valor">{{ total_apps }}</div>
+        </td>
+        <td style="width: 25%">
+          <div class="label">Día</div>
+          <div class="valor">{{ fecha }}</div>
+        </td>
+      </tr>
+    </table>
+
+    <!-- 3. DISTRIBUCIÓN POR APLICACIÓN -->
+    {% if datos_app %}
+    <div class="seccion-titulo">3. Distribución por aplicación</div>
+    <table class="data">
+      <thead>
+        <tr>
+          <th style="width: 60%">Aplicación</th>
+          <th class="text-right" style="width: 25%">Duración</th>
+          <th class="text-right" style="width: 15%">%</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in datos_app %}
+        <tr>
+          <td>{{ a.nombre }}</td>
+          <td class="text-right">{{ a.duracion }}</td>
+          <td class="text-right">{{ a.porcentaje }}%</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td>TOTAL</td>
+          <td class="text-right">{{ tiempo_total_formateado }}</td>
+          <td class="text-right">100%</td>
+        </tr>
+      </tfoot>
+    </table>
+    {% endif %}
+
+    <!-- 4. DETALLE DE ACTIVIDAD -->
+    {% if datos_reg %}
+    <div class="seccion-titulo">4. Detalle de actividad</div>
+    <table class="data">
+      <thead>
+        <tr>
+          <th style="width: 14%">Aplicación</th>
+          <th style="width: 26%">Descripción</th>
+          <th style="width: 30%">URL</th>
+          <th class="text-center" style="width: 8%">Inicio</th>
+          <th class="text-center" style="width: 8%">Fin</th>
+          <th class="text-right" style="width: 14%">Duración</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in datos_reg %}
+        <tr>
+          <td>{{ r.app }}</td>
+          <td>{{ r.descripcion }}</td>
+          <td>{{ r.url or "—" }}</td>
+          <td class="text-center">{{ r.hora_inicio }}</td>
+          <td class="text-center">{{ r.hora_fin }}</td>
+          <td class="text-right">{{ r.duracion }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colspan="5">TOTAL</td>
+          <td class="text-right">{{ tiempo_total_formateado }}</td>
+        </tr>
+      </tfoot>
+    </table>
+    {% endif %}
+  </body>
+</html>

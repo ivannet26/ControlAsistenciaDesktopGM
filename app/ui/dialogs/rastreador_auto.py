@@ -1,5 +1,5 @@
 from datetime import datetime, date
-
+from app.services.pdf_export import exportar_informe_pdf
 from PySide6.QtCore import Qt, QDate, Signal, QTimer
 from PySide6.QtGui import QColor, QBrush, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
@@ -387,6 +387,12 @@ class BarraHerramientas(QWidget):
         self.btn_export.setCursor(Qt.PointingHandCursor)
         self.btn_export.setToolTip("Guardar los registros en un archivo .xlsx")
         lay.addWidget(self.btn_export)
+        # Botón Exportar PDF
+        self.btn_pdf = QPushButton("Exportar PDF")
+        self.btn_pdf.setObjectName("btnAccionPrimario")
+        self.btn_pdf.setCursor(Qt.PointingHandCursor)
+        self.btn_pdf.setToolTip("Generar informe en PDF")
+        lay.addWidget(self.btn_pdf)
 
 
 # ============================================================
@@ -491,6 +497,7 @@ class VentanaRastreadorAuto(QDialog):
         self.toolbar.buscador.textChanged.connect(self._filtrar)
         self.toolbar.btn_refresh.clicked.connect(self._refresh_manual)
         self.toolbar.btn_export.clicked.connect(self._exportar_excel)
+        self.toolbar.btn_pdf.clicked.connect(self._exportar_pdf)
         lay.addWidget(self.toolbar)
 
         # 4) Split
@@ -953,7 +960,7 @@ class VentanaRastreadorAuto(QDialog):
 
         try:
             wb.save(ruta)
-            print(f"[VISOR] ✅ Exportado a: {ruta}")
+            print(f"[VISOR]  Exportado a: {ruta}")
             self.lbl_actualizado.setText(f"● Exportado {datetime.now().strftime('%H:%M:%S')}")
         except PermissionError:
             print(f"[VISOR] ❌ No puedo escribir el archivo. ¿Está abierto en Excel?")
@@ -961,6 +968,62 @@ class VentanaRastreadorAuto(QDialog):
             print(f"[VISOR] ❌ Error guardando: {e}")
 
     # ------------------------------------------------------------
+    def _exportar_pdf(self):
+        """Exporta los registros actuales a un PDF con plantilla."""
+        if not self._registros:
+            print("[VISOR] ⚠️  No hay registros para exportar")
+            return
+
+        fecha_str = self.barra_info.fecha.date().toString("yyyy-MM-dd")
+
+        # Nombre de archivo sugerido
+        usuario = {}
+        p = self.parent()
+        while p is not None and not hasattr(p, "usuario"):
+            p = p.parent() if hasattr(p, "parent") else None
+        if p is not None:
+            usuario = getattr(p, "usuario", {}) or {}
+
+        nombre_limpio = (
+            f"{usuario.get('nombre', 'usuario')}_{usuario.get('apellido', '')}"
+            .strip()
+            .lower()
+            .replace(" ", "_")
+        )
+        for c in '\\/:*?"<>|':
+            nombre_limpio = nombre_limpio.replace(c, "")
+        nombre_default = f"informe_rastreador_{nombre_limpio}_{fecha_str}.pdf"
+
+        ruta, _ = QFileDialog.getSaveFileName(
+            self,
+            "Guardar informe como PDF",
+            nombre_default,
+            "PDF (*.pdf);;Todos los archivos (*)",
+        )
+        if not ruta:
+            return
+        if not ruta.lower().endswith(".pdf"):
+            ruta += ".pdf"
+
+        try:
+            ok = exportar_informe_pdf(
+                ruta_salida=ruta,
+                usuario=usuario,
+                fecha_iso=fecha_str,
+                registros=self._registros,
+                grupo=self._grupo,
+            )
+            if ok:
+                print(f"[VISOR]  PDF exportado a: {ruta}")
+                self.lbl_actualizado.setText(
+                    f"● PDF {datetime.now().strftime('%H:%M:%S')}"
+                )
+            else:
+                print("[VISOR] ❌ Error generando PDF")
+                self.lbl_actualizado.setText("● Error al generar PDF")
+        except Exception as e:
+            print(f"[VISOR] ❌ Error generando PDF: {e}")
+            self.lbl_actualizado.setText("● Error al generar PDF")
     def closeEvent(self, event):
         """Detiene el auto-refresh al cerrar el visor."""
         if hasattr(self, "_timer_refresh"):
