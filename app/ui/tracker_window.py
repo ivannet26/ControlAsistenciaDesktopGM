@@ -939,10 +939,20 @@ class TrackerWindow(QWidget):
 
         candidatas.sort(key=_distancia)
         return candidatas[0][1]
+
     # -------- Método principal --------
-    def obtener_registros_rastreador(self, fecha_iso=None):
+    def obtener_registros_rastreador(self, fecha_iso=None, usuario_id_objetivo=None):
         if fecha_iso is None:
             fecha_iso = date.today().isoformat()
+
+        # Si nos pasan un usuario_id_objetivo (modo Admin), usamos el endpoint de admin
+        if usuario_id_objetivo is not None:
+            try:
+                datos = self.client.obtener_actividad_dia_admin(usuario_id_objetivo, fecha_iso)
+                return datos.get("registros", []), datos.get("grupo", [])
+            except Exception as e:
+                print(f"[VISOR] Error consultando actividad de {usuario_id_objetivo}: {e}")
+                return [], []
 
         uid = self.usuario.get("id")
         

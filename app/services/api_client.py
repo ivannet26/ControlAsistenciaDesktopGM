@@ -223,3 +223,17 @@ class ApiClient:
             "/rastreador/actividad/dia",
             params={"fecha": fecha_iso},
         )
+        # ---------------- usuarios (Para el Admin) ----------------
+    def listar_usuarios(self):
+        """
+        GET /usuarios
+        Devuelve la lista de todos los usuarios (requiere ser admin).
+        """
+        return self._request("GET", "/usuarios")
+    def obtener_actividad_dia_admin(self, usuario_id, fecha_iso):
+        """Para que un Admin vea la actividad de otro usuario."""
+        return self._request(
+            "GET",
+            f"/rastreador/actividad/dia/{usuario_id}",
+            params={"fecha": fecha_iso},
+        )

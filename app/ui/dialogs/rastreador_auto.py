@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QWidget, QLineEdit, QTableWidget, QTableWidgetItem, QHeaderView,
     QDateEdit, QSizePolicy, QAbstractItemView, QSplitter, QFileDialog,
 )
-
+from app.services.websocket_client import RastreadorWebSocket
 from app.styles.colors import (
     COLOR_FONDO, COLOR_PANEL, COLOR_BORDE, COLOR_BORDE_INPUT,
     COLOR_INPUT_BG, COLOR_TEXTO, COLOR_TEXTO_SECUNDARIO, COLOR_TEXTO_TERCIARIO,
@@ -410,13 +410,13 @@ class VentanaRastreadorAuto(QDialog):
     `cargar_datos_cb(fecha_iso: str) -> (registros, grupo)`
     """
 
-    def __init__(self, parent=None, cargar_datos_cb=None, registros=None, grupo=None):
+    def __init__(self, parent=None, cargar_datos_cb=None, registros=None, grupo=None, usuario_id=None):
         super().__init__(parent)
         self._cargar_datos_cb = cargar_datos_cb
         self._registros = []
         self._grupo = []
         self._ultima_actualizacion = "—"
-
+        self._usuario_id = usuario_id  
         self.setWindowTitle("Rastreador automático")
         self.setModal(True)
         self.setWindowFlag(Qt.FramelessWindowHint)
@@ -438,6 +438,64 @@ class VentanaRastreadorAuto(QDialog):
         self._timer_refresh.timeout.connect(self._auto_refresh)
         self._timer_refresh.start(5000)
         print(f"[VISOR] QTimer arrancado — activo={self._timer_refresh.isActive()}")
+
+        # ============================================================
+        # RECEPTOR WEBSOCKET PARA TIEMPO REAL
+        # ============================================================
+        self.ws_live = None
+        if self._usuario_id and self.parent() and hasattr(self.parent(), 'client'):
+            client_padre = self.parent().client
+            self.ws_live = RastreadorWebSocket(
+                base_url="https://backendcontrolasistenciagm.onrender.com",
+                token=client_padre.token,
+                usuario_id_vigilar=self._usuario_id,
+                parent=self
+            )
+            self.ws_live.datos_recibidos.connect(self._on_datos_en_vivo)
+            self.ws_live.conectar()
+            print(f"[VISOR] WebSocket conectado para ver en vivo al usuario {self._usuario_id}")
+
+    def _on_datos_en_vivo(self, data):
+        """Recibe los datos del WebSocket y actualiza la tabla al instante."""
+        if data.get("tipo") == "nueva_actividad":
+            print(f"[VISOR] 🟢 Datos en vivo recibidos: {len(data.get('registros', []))} registros")
+            
+            # Añadimos los registros a la tabla sin esperar al QTimer
+            for reg in data.get("registros", []):
+                fila = self.tabla.rowCount()
+                self.tabla.insertRow(fila)
+                
+                # App
+                item_app = QTableWidgetItem(reg.get("app", ""))
+                color = reg.get("color") or "#2196f3"
+                item_app.setForeground(QBrush(QColor(color)))
+                self.tabla.setItem(fila, 0, item_app)
+                
+                # Descripción
+                self.tabla.setItem(fila, 1, QTableWidgetItem(reg.get("descripcion", "")))
+                
+                # URL
+                url = reg.get("url") or "—"
+                item_url = QTableWidgetItem(url)
+                if reg.get("url"):
+                    item_url.setForeground(QBrush(QColor(COLOR_ACENTO)))
+                    item_url.setToolTip(reg["url"])
+                self.tabla.setItem(fila, 2, item_url)
+                
+                # Horas y duración
+                self.tabla.setItem(fila, 3, QTableWidgetItem(reg.get("hora_inicio", "")))
+                self.tabla.setItem(fila, 4, QTableWidgetItem(reg.get("hora_fin", "")))
+                self.tabla.setItem(fila, 5, QTableWidgetItem(reg.get("duracion", "")))
+                self.tabla.setItem(fila, 6, QTableWidgetItem("0%"))
+                self.tabla.setItem(fila, 7, QTableWidgetItem("+"))
+
+                # Añadir a la lista interna para que los totales se actualicen
+                self._registros.append(reg)
+
+            # Actualizar totales y gráficos al instante
+            self._actualizar_resumen()
+            self._actualizar_linea_tiempo()
+            self._actualizar_seleccion()
 
     # ------------------------------------------------------------
     def _get_cb(self):
@@ -746,7 +804,11 @@ class VentanaRastreadorAuto(QDialog):
             return
         fecha_iso = qdate.toString("yyyy-MM-dd")
         try:
-            registros, grupo = cb(fecha_iso)
+            # Si self._usuario_id existe (Modo Admin), consultamos los datos de ESE usuario
+            if self._usuario_id:
+                registros, grupo = cb(fecha_iso, usuario_id_objetivo=self._usuario_id)
+            else:
+                registros, grupo = cb(fecha_iso)
         except Exception as e:
             print(f"[Rastreador] Error cargando datos: {e}")
             registros, grupo = [], []
@@ -764,7 +826,10 @@ class VentanaRastreadorAuto(QDialog):
         qdate = self.barra_info.fecha.date()
         fecha_iso = qdate.toString("yyyy-MM-dd")
         try:
-            registros, grupo = cb(fecha_iso)
+            if self._usuario_id:
+                registros, grupo = cb(fecha_iso, usuario_id_objetivo=self._usuario_id)
+            else:
+                registros, grupo = cb(fecha_iso)
         except Exception as e:
             print(f"[Rastreador] Error cargando datos: {e}")
             return
@@ -776,9 +841,7 @@ class VentanaRastreadorAuto(QDialog):
         print(f"[VISOR] 🔄 Manual: {len(registros)} registros cargados")
 
     def _auto_refresh(self):
-        """Recarga silenciosamente los datos si estamos en el día de hoy.
-        NO toca el scroll para no interrumpir al usuario.
-        """
+        """Recarga silenciosamente los datos si estamos en el día de hoy."""
         qdate = self.barra_info.fecha.date()
         if qdate != QDate.currentDate():
             return
@@ -791,7 +854,10 @@ class VentanaRastreadorAuto(QDialog):
 
         fecha_iso = qdate.toString("yyyy-MM-dd")
         try:
-            registros, grupo = cb(fecha_iso)
+            if self._usuario_id:
+                registros, grupo = cb(fecha_iso, usuario_id_objetivo=self._usuario_id)
+            else:
+                registros, grupo = cb(fecha_iso)
         except Exception as e:
             print(f"[Rastreador] Error cargando datos: {e}")
             return
@@ -1036,6 +1102,14 @@ class VentanaRastreadorAuto(QDialog):
         """Detiene el auto-refresh al cerrar el visor."""
         if hasattr(self, "_timer_refresh"):
             self._timer_refresh.stop()
+        
+        if hasattr(self, 'ws_live') and self.ws_live:
+            self.ws_live.desconectar()
+            # Damos un pequeño margen para que el socket se cierre limpiamente
+            # sin que Python se queje del QThread
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(200, lambda: None)
+        
         super().closeEvent(event)
 
     # ------------------------------------------------------------

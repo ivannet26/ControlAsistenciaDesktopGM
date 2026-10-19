@@ -78,11 +78,11 @@ class CustomTitleBar(QWidget):
             self.btn_min.clicked.connect(self.parent_window.showMinimized)
 
         if mostrar_maximizar:
-            self.btn_max = self._crear_boton("□", "max")
+            self.btn_max = self._crear_boton("🔳", "max")
             layout.addWidget(self.btn_max)
             self.btn_max.clicked.connect(self._toggle_max)
 
-        self.btn_close = self._crear_boton("✕", "close")
+        self.btn_close = self._crear_boton("X", "close")
         self.btn_close.setObjectName("btn_close")
         layout.addWidget(self.btn_close)
         self.btn_close.clicked.connect(self.parent_window.close)

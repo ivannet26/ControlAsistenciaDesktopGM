@@ -213,7 +213,23 @@ class HeaderWidget(QWidget):
         acc_pref = QAction("Preferencias", self)
         acc_pref.triggered.connect(self._abrir_preferencias)
         menu.addAction(acc_pref)
+                # ============================================================
+        # NUEVO: BOTÓN DE MONITOREO EN VIVO (SOLO ADMIN)
+        # ============================================================
+        # Verificamos si el usuario es admin (buscando en el padre)
+        es_admin = False
+        ventana_padre = self.window()
+        if hasattr(ventana_padre, "es_admin"):
+            es_admin = ventana_padre.es_admin
+        elif hasattr(ventana_padre, "usuario"):
+            rol = str(ventana_padre.usuario.get("rol", "")).lower()
+            es_admin = rol in ("admin", "administrador", "administracion")
 
+        if es_admin:
+            acc_monitoreo = QAction(" Gestion de Usuarios", self)
+            acc_monitoreo.triggered.connect(self._abrir_panel_admin)
+            menu.addAction(acc_monitoreo)
+        # ============================================================
         menu.addSeparator()
 
         # ---- Informes y ayuda ----
@@ -335,6 +351,7 @@ class HeaderWidget(QWidget):
         dlg = VentanaRastreadorAuto(
             parent=ventana,
             cargar_datos_cb=cb,
+            usuario_id=None,
         )
         dlg.exec()
     def _on_actualizar(self):
@@ -352,3 +369,22 @@ class HeaderWidget(QWidget):
     def _salir_app(self):
         from PySide6.QtWidgets import QApplication
         QApplication.quit()
+    def _abrir_panel_admin(self):
+        """Abre el panel de administración para ver el monitoreo en vivo."""
+        from app.ui.dialogs.panel_admin_rastreador import PanelAdminRastreador
+        
+        ventana_padre = self.window()
+        client = getattr(ventana_padre, "client", None)
+        
+        if client is None:
+            print("[Header] ⚠️ No se encontró el cliente API en la ventana padre")
+            return
+        
+        if not hasattr(self, "_panel_admin") or self._panel_admin is None:
+            # AQUÍ ESTÁ EL CAMBIO: parent=ventana_padre (en lugar de None)
+            self._panel_admin = PanelAdminRastreador(client=client, parent=ventana_padre)
+            self._panel_admin.setModal(False)
+            self._panel_admin.show()
+        else:
+            self._panel_admin.raise_()
+            self._panel_admin.activateWindow()
