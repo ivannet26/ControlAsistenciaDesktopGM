@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta
+import requests
 
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtWidgets import (
@@ -944,58 +945,54 @@ class TrackerWindow(QWidget):
             fecha_iso = date.today().isoformat()
 
         uid = self.usuario.get("id")
-
+        
+        # ============================================================
+        # 1. CONSULTAR AL BACKEND EN RENDER (Usando tu propio ApiClient)
+        # ============================================================
         try:
-            self.rastreador.db.actualizar_duracion_activa()
-        except Exception:
-            pass
-
-        try:
-            segmentos = self.rastreador.db.obtener_segmentos(uid, fecha_iso)
-            print(f"[DEBUG] BD local (usuario {uid}) devolvió {len(segmentos)} segmentos")
-        except Exception as e:
-            print(f"[Rastreador] Error leyendo segmentos locales: {e}")
-            segmentos = []
-        try:
-            fecha_obj = datetime.fromisoformat(fecha_iso).date()
-        except (ValueError, TypeError):
-            fecha_obj = date.today()
-
-
-        registros = []
-        for seg in segmentos:
-            app = (seg.get("app") or "").lower()
-            inicio_iso = seg.get("inicio")
-            fin_iso = seg.get("fin")
-            duracion = int(seg.get("duracion_seg") or 0)
-
-            hora_ini = self._hora_de_iso(inicio_iso)
-            hora_fin = self._hora_de_iso(fin_iso) if fin_iso else "en curso"
-            dur_str = self._seg_a_hhmmss(duracion)
-            color = COLORES_POR_APP.get(app, COLOR_POR_DEFECTO)
-
-            es_navegador = app in NAVEGADORES_CONOCIDOS
-
-            if es_navegador:
-                # URL guardada directamente en el segmento (capturada en vivo)
-                url_seg = seg.get("url") or ""
-                desc_seg = seg.get("descripcion") or seg.get("titulo") or ""
-
-                registros.append({
-                    "app": NAVEGADORES_CONOCIDOS[app],
-                    "descripcion": desc_seg,
-                    "url": url_seg,
-                    "hora_inicio": hora_ini,
-                    "hora_fin": hora_fin,
-                    "duracion": dur_str,
-                    "inactividad": 0.0,
-                    "color": color,
-                })
+            print(f"[VISOR] Consultando backend para fecha {fecha_iso}...")
+            # Llamamos al método que ya tienes en api_client.py
+            datos = self.client.obtener_actividad_dia(fecha_iso)
+            
+            if datos:
+                registros = datos.get("registros", [])
+                grupo = datos.get("grupo", [])
+                print(f"[VISOR] ✅ Backend devolvió {len(registros)} registros y {len(grupo)} grupos")
+                return registros, grupo
             else:
+                print("[VISOR] ⚠️ El backend devolvió datos vacíos")
+                return [], []
+                
+        except Exception as e:
+            print(f"[VISOR] ❌ Error consultando backend: {e}")
+            print("[VISOR] Usando base de datos local como respaldo...")
+            
+            # ============================================================
+            # 2. PLAN DE RESPALDO: Si falla la red, leer SQLite local
+            # ============================================================
+            try:
+                self.rastreador.db.actualizar_duracion_activa()
+                segmentos = self.rastreador.db.obtener_segmentos(uid, fecha_iso)
+            except Exception as err:
+                print(f"[Rastreador] Error leyendo segmentos locales: {err}")
+                segmentos = []
+
+            registros = []
+            for seg in segmentos:
+                app = (seg.get("app") or "").lower()
+                inicio_iso = seg.get("inicio")
+                fin_iso = seg.get("fin")
+                duracion = int(seg.get("duracion_seg") or 0)
+                hora_ini = self._hora_de_iso(inicio_iso)
+                hora_fin = self._hora_de_iso(fin_iso) if fin_iso else "en curso"
+                dur_str = self._seg_a_hhmmss(duracion)
+                color = COLORES_POR_APP.get(app, COLOR_POR_DEFECTO)
+                es_navegador = app in NAVEGADORES_CONOCIDOS
+
                 registros.append({
-                    "app": app or "desconocido",
+                    "app": NAVEGADORES_CONOCIDOS[app] if es_navegador else (app or "desconocido"),
                     "descripcion": seg.get("descripcion") or seg.get("titulo") or "",
-                    "url": "",
+                    "url": seg.get("url") or "",
                     "hora_inicio": hora_ini,
                     "hora_fin": hora_fin,
                     "duracion": dur_str,
@@ -1003,11 +1000,9 @@ class TrackerWindow(QWidget):
                     "color": color,
                 })
 
-        registros.sort(key=lambda r: (r["hora_inicio"] == "—", r["hora_inicio"]))
-
-        grupo = self._construir_grupo(segmentos)
-        print(f"[DEBUG] Construidos {len(registros)} registros finales")
-        return registros, grupo
+            registros.sort(key=lambda r: (r["hora_inicio"] == "—", r["hora_inicio"]))
+            grupo = self._construir_grupo(segmentos)
+            return registros, grupo
 
     def _construir_grupo(self, segmentos):
         acumulado = {}

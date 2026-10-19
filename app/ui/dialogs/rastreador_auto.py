@@ -994,12 +994,20 @@ class VentanaRastreadorAuto(QDialog):
             nombre_limpio = nombre_limpio.replace(c, "")
         nombre_default = f"informe_rastreador_{nombre_limpio}_{fecha_str}.pdf"
 
+               
+        from pathlib import Path
+        import os
+        
+        carpeta_documentos = Path(os.path.expanduser("~")) / "Documents"
+        carpeta_documentos.mkdir(parents=True, exist_ok=True)
+        ruta_sugerida = carpeta_documentos / nombre_default
         ruta, _ = QFileDialog.getSaveFileName(
             self,
             "Guardar informe como PDF",
-            nombre_default,
+            str(ruta_sugerida),
             "PDF (*.pdf);;Todos los archivos (*)",
         )
+        
         if not ruta:
             return
         if not ruta.lower().endswith(".pdf"):
