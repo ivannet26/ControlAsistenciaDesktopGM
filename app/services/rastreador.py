@@ -1,9 +1,10 @@
 import os
 import sqlite3
+import time
 from datetime import datetime, date
 from pathlib import Path
 from app.services.url_activa import url_navegador_activo
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject, QTimer, Signal, QThread
 
 # Dependencias opcionales (solo se activan en Windows)
 try:
@@ -118,6 +119,7 @@ class RastreadorDB:
             con.commit()
         finally:
             con.close()
+
     # ---------- Escritura ----------
     def cerrar_segmento_activo(self, usuario_id=None, fin_iso=None):
         if fin_iso is None:
@@ -260,6 +262,39 @@ def _ventana_activa():
 
 
 # ============================================================
+# HILO PARA LEER URLS (Evita que la interfaz se congele)
+# ============================================================
+class HiloLectorURL(QThread):
+    url_leida = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._activo = True
+        self._app_actual = ""
+
+    def set_app(self, app):
+        self._app_actual = app
+
+    def run(self):
+        while self._activo:
+            # Solo leer si es un navegador conocido
+            if self._app_actual in NAVEGADORES_CONOCIDOS:
+                try:
+                    # Esta llamada ya NO bloquea la interfaz
+                    url = url_navegador_activo() or ""
+                    self.url_leida.emit(url)
+                except Exception:
+                    pass
+            
+            # Pausa crítica: evita que el hilo consuma 100% CPU
+            time.sleep(1) 
+
+    def detener(self):
+        self._activo = False
+        self.wait()
+
+
+# ============================================================
 # SERVICIO PRINCIPAL
 # ============================================================
 class RastreadorAuto(QObject):
@@ -293,6 +328,11 @@ class RastreadorAuto(QObject):
         self._id_segmento = None
         self._url_actual = ""
 
+        # Inicializar el hilo de lectura de URLs
+        self._hilo_url = HiloLectorURL()
+        self._hilo_url.url_leida.connect(self._actualizar_url_desde_hilo)
+        self._hilo_url.start()
+
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._muestrear)
 
@@ -322,11 +362,17 @@ class RastreadorAuto(QObject):
         self._titulo_actual = None
         self._id_segmento = None
         self._url_actual = ""
+        if hasattr(self, '_hilo_url'):
+            self._hilo_url.detener()
 
     def set_intervalo(self, seg: int):
         self.intervalo_seg = max(1, int(seg))
         if self._activo:
             self._timer.start(self.intervalo_seg * 1000)
+
+    def _actualizar_url_desde_hilo(self, url):
+        """Recibe la URL desde el hilo secundario y la guarda."""
+        self._url_actual = url
 
     # ---------- Muestreo ----------
     def _muestrear(self):
@@ -351,13 +397,13 @@ class RastreadorAuto(QObject):
                 self._url_actual = ""
             return
 
-        # Capturar URL real si es navegador
-        url_real = ""
+        # Capturar URL real si es navegador (delegado al hilo)
         if app in NAVEGADORES_CONOCIDOS:
-            try:
-                url_real = url_navegador_activo() or ""
-            except Exception:
-                url_real = ""
+            self._hilo_url.set_app(app)
+            url_real = self._url_actual # Usamos la última URL que leyó el hilo
+        else:
+            self._hilo_url.set_app("")
+            url_real = ""
 
         # Sin cambio
         if (
