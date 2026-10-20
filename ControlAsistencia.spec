@@ -25,6 +25,9 @@ a = Analysis(
         'PySide6.QtGui',
         'PySide6.QtWidgets',
         'PySide6.QtNetwork',
+        # --- NUEVOS: Paneles de Administración y Rastreador ---
+        'app.ui.dialogs.panel_admin_rastreador',
+        'app.ui.dialogs.rastreador_auto',
     ] + hiddenimports_rl,
     hookspath=[],
     hooksconfig={},
