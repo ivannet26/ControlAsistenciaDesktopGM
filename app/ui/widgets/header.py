@@ -366,9 +366,6 @@ class HeaderWidget(QWidget):
     # ============================================================
     # SALIR DE LA APP
     # ============================================================
-    def _salir_app(self):
-        from PySide6.QtWidgets import QApplication
-        QApplication.quit()
     def _abrir_panel_admin(self):
         """Abre el panel de administración para ver el monitoreo en vivo."""
         from app.ui.dialogs.panel_admin_rastreador import PanelAdminRastreador
@@ -380,11 +377,34 @@ class HeaderWidget(QWidget):
             print("[Header] ⚠️ No se encontró el cliente API en la ventana padre")
             return
         
-        if not hasattr(self, "_panel_admin") or self._panel_admin is None:
-            # AQUÍ ESTÁ EL CAMBIO: parent=ventana_padre (en lugar de None)
-            self._panel_admin = PanelAdminRastreador(client=client, parent=ventana_padre)
-            self._panel_admin.setModal(False)
-            self._panel_admin.show()
-        else:
-            self._panel_admin.raise_()
-            self._panel_admin.activateWindow()
+        # 1. Verificamos si la ventana existe y sigue viva (no destruida)
+        if hasattr(self, "_panel_admin") and self._panel_admin is not None:
+            try:
+                if self._panel_admin.isVisible():
+                    self._panel_admin.raise_()
+                    self._panel_admin.activateWindow()
+                    return
+            except RuntimeError:
+                # La ventana fue destruida por Qt (C++ object deleted)
+                self._panel_admin = None
+        
+        # 2. Si llegamos aquí, creamos una nueva instancia
+        self._panel_admin = PanelAdminRastreador(
+            client=client, 
+            parent=ventana_padre,
+            tracker_window=ventana_padre # <--- Le pasamos el TrackerWindow
+        )
+        self._panel_admin.setModal(False)
+        
+        # 3. Cuando se cierre, limpiamos la referencia para no usar objetos muertos
+        self._panel_admin.finished.connect(self._limpiar_panel_admin)
+        
+        self._panel_admin.show()
+
+    def _limpiar_panel_admin(self):
+        """Limpia la referencia cuando el panel de admin se cierra."""
+        self._panel_admin = None
+    def _salir_app(self):
+        """Cierra la aplicación completamente."""
+        from PySide6.QtWidgets import QApplication
+        QApplication.quit()
