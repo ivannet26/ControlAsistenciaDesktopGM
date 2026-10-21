@@ -299,7 +299,7 @@ class DialogoPreferencias(QDialog):
         # ---- Actualizaciones ----
         layout.addWidget(self._subtitulo("Actualizaciones"))
         layout.addSpacing(2)
-        layout.addWidget(self._descripcion("Versión de la aplicación 1.0.8"))
+        layout.addWidget(self._descripcion("Versión de la aplicación 1.0.9"))
 
         layout.addSpacing(12)
         layout.addWidget(self._divisor())

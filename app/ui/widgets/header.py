@@ -16,7 +16,7 @@ COLOR_ORG = "#8ea0af"      # gris azulado, sobrio
 COLOR_TITULO = "#ffffff"
 COLOR_LINEA = "#2196f3"    # acento discreto
 
-VERSION_APP = "1.0.8"
+VERSION_APP = "1.0.9"
 
 
 class HeaderWidget(QWidget):
