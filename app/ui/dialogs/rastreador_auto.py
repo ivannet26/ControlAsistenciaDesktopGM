@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
     QWidget, QLineEdit, QTableWidget, QTableWidgetItem, QHeaderView,
     QDateEdit, QSizePolicy, QAbstractItemView, QSplitter, QFileDialog,
+    QMessageBox,
 )
 from app.services.websocket_client import RastreadorWebSocket
 from app.styles.colors import (
@@ -14,6 +15,125 @@ from app.styles.colors import (
     COLOR_ACENTO, COLOR_ACENTO_HOVER, COLOR_ACENTO_PRESSED,
     COLOR_HEADER_SEMANA, RADIO_INPUT, RADIO_BOTON,
 )
+from app.utils.workers import ApiWorker
+
+
+def _generar_excel_exportacion(
+    ruta,
+    registros,
+    grupo,
+    fecha_str,
+    iniciado_texto,
+    finalizado_texto,
+    duracion_texto,
+    usuario,
+):
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Registros detallados"
+
+    fuente_header = Font(bold=True, color="FFFFFF", size=11)
+    fondo_header = PatternFill("solid", fgColor="1F4E78")
+    alineacion = Alignment(horizontal="left", vertical="center")
+    borde = Border(
+        left=Side(style="thin", color="CCCCCC"),
+        right=Side(style="thin", color="CCCCCC"),
+        top=Side(style="thin", color="CCCCCC"),
+        bottom=Side(style="thin", color="CCCCCC"),
+    )
+
+    ws["A1"] = "Rastreador automático"
+    ws["A1"].font = Font(bold=True, size=14)
+    ws["A2"] = f"Fecha: {fecha_str}"
+    nombre_usuario = (
+        f"{usuario.get('nombre', '')} {usuario.get('apellido', '')}".strip()
+        or "(sin nombre)"
+    )
+    ws["A3"] = f"Usuario: {nombre_usuario}"
+    ws["A4"] = f"Email: {usuario.get('email') or '(sin email)'}"
+    ws["A5"] = f"Iniciado: {iniciado_texto}"
+    ws["A6"] = f"Finalizado: {finalizado_texto}"
+    ws["A7"] = f"Duración total: {duracion_texto}"
+    ws["A8"] = f"Total registros: {len(registros)}"
+
+    fila_header = 10
+    cabeceras = [
+        "Aplicación", "Descripción", "URL",
+        "Hora de inicio", "Hora de final", "Duración",
+        "Inactividad", "Agregar como",
+    ]
+    for col, titulo in enumerate(cabeceras, start=1):
+        celda = ws.cell(row=fila_header, column=col, value=titulo)
+        celda.font = fuente_header
+        celda.fill = fondo_header
+        celda.alignment = alineacion
+        celda.border = borde
+
+    for i, reg in enumerate(registros, start=fila_header + 1):
+        valores = [
+            reg.get("app", ""),
+            reg.get("descripcion", ""),
+            reg.get("url", ""),
+            reg.get("hora_inicio", ""),
+            reg.get("hora_fin", ""),
+            reg.get("duracion", ""),
+            f"{int((reg.get('inactividad') or 0) * 100)}%",
+            "+",
+        ]
+        for col, valor in enumerate(valores, start=1):
+            celda = ws.cell(row=i, column=col, value=valor)
+            celda.border = borde
+
+    for col, ancho in enumerate([18, 35, 50, 14, 14, 12, 12, 14], start=1):
+        letra = ws.cell(row=1, column=col).column_letter
+        ws.column_dimensions[letra].width = ancho
+    ws.freeze_panes = f"A{fila_header + 1}"
+
+    ws2 = wb.create_sheet("Vista de grupo")
+    ws2["A1"] = "Vista de grupo"
+    ws2["A1"].font = Font(bold=True, size=14)
+    ws2["A2"] = f"Fecha: {fecha_str}"
+
+    fila_h2 = 4
+    for col, titulo in enumerate(["Aplicación", "Uso (%)", "Total"], start=1):
+        celda = ws2.cell(row=fila_h2, column=col, value=titulo)
+        celda.font = fuente_header
+        celda.fill = fondo_header
+        celda.alignment = alineacion
+        celda.border = borde
+
+    for i, item in enumerate(grupo, start=fila_h2 + 1):
+        valores = [
+            item.get("app", ""),
+            item.get("uso_pct", 0),
+            item.get("total_str", ""),
+        ]
+        for col, valor in enumerate(valores, start=1):
+            celda = ws2.cell(row=i, column=col, value=valor)
+            celda.border = borde
+
+    ws2.column_dimensions["A"].width = 25
+    ws2.column_dimensions["B"].width = 12
+    ws2.column_dimensions["C"].width = 14
+    ws2.freeze_panes = f"A{fila_h2 + 1}"
+    wb.save(ruta)
+    return ruta
+
+
+def _generar_pdf_exportacion(ruta, usuario, fecha_str, registros, grupo):
+    ok = exportar_informe_pdf(
+        ruta_salida=ruta,
+        usuario=usuario,
+        fecha_iso=fecha_str,
+        registros=registros,
+        grupo=grupo,
+    )
+    if not ok:
+        raise RuntimeError("El generador PDF indicó un error.")
+    return ruta
 
 
 # ============================================================
@@ -410,13 +530,34 @@ class VentanaRastreadorAuto(QDialog):
     `cargar_datos_cb(fecha_iso: str) -> (registros, grupo)`
     """
 
-    def __init__(self, parent=None, cargar_datos_cb=None, registros=None, grupo=None, usuario_id=None):
+    def __init__(
+        self,
+        parent=None,
+        cargar_datos_cb=None,
+        registros=None,
+        grupo=None,
+        usuario_id=None,
+        usuario=None,
+    ):
         super().__init__(parent)
         self._cargar_datos_cb = cargar_datos_cb
         self._registros = []
         self._grupo = []
         self._ultima_actualizacion = "—"
-        self._usuario_id = usuario_id  
+        self._pagina_actual = 1
+        self._total_paginas = 1
+        self._registros_por_pagina = 50
+        self._total_registros = 0
+        self._total_iniciado = 0
+        self._total_finalizado = 0
+        self._total_duracion = "—"
+        self._hora_inicio_dia = None
+        self._hora_fin_dia = None
+        self._usuario_id = usuario_id
+        self._usuario = usuario or {}
+        self._workers = []
+        self._carga_en_curso = False
+        self._carga_pendiente = False
         self.setWindowTitle("Rastreador automático")
         self.setModal(False)
         self.setWindowFlag(Qt.FramelessWindowHint)
@@ -433,10 +574,12 @@ class VentanaRastreadorAuto(QDialog):
         else:
             self._recargar_fecha(QDate.currentDate())
 
+        QTimer.singleShot(500, self._ir_a_ultima_pagina)
+
         # ⏱️ Auto-refresh cada 5 segundos
         self._timer_refresh = QTimer(self)
         self._timer_refresh.timeout.connect(self._auto_refresh)
-        self._timer_refresh.start(2000)
+        self._timer_refresh.start(5000)
         print(f"[VISOR] QTimer arrancado — activo={self._timer_refresh.isActive()}")
 
         # ============================================================
@@ -459,9 +602,35 @@ class VentanaRastreadorAuto(QDialog):
         """Recibe los datos del WebSocket y actualiza la tabla al instante."""
         if data.get("tipo") == "nueva_actividad":
             print(f"[VISOR] 🟢 Datos en vivo recibidos: {len(data.get('registros', []))} registros")
-            
-            # Añadimos los registros a la tabla sin esperar al QTimer
+            filas_nuevas = False
+
             for reg in data.get("registros", []):
+                reg_id = reg.get("id")
+
+                def coincide_con_existente(existente):
+                    existente_id = existente.get("id")
+                    if reg_id is not None and existente_id is not None:
+                        return reg_id == existente_id
+                    return (
+                        existente.get("app", ""),
+                        existente.get("hora_inicio", ""),
+                        existente.get("descripcion", ""),
+                        existente.get("url") or "",
+                    ) == (
+                        reg.get("app", ""),
+                        reg.get("hora_inicio", ""),
+                        reg.get("descripcion", ""),
+                        reg.get("url") or "",
+                    )
+
+                if any(coincide_con_existente(existente) for existente in self._registros):
+                    continue
+
+                if self.tabla.rowCount() >= self._registros_por_pagina:
+                    self.tabla.removeRow(0)
+                    if self._registros:
+                        self._registros.pop(0)
+
                 fila = self.tabla.rowCount()
                 self.tabla.insertRow(fila)
                 
@@ -484,19 +653,37 @@ class VentanaRastreadorAuto(QDialog):
                 
                 # Horas y duración
                 self.tabla.setItem(fila, 3, QTableWidgetItem(reg.get("hora_inicio", "")))
-                self.tabla.setItem(fila, 4, QTableWidgetItem(reg.get("hora_fin", "")))
+                hora_fin = reg.get("hora_fin")
+                en_curso = (
+                    hora_fin is None
+                    or not str(hora_fin).strip()
+                    or str(hora_fin).strip().lower() == "en curso"
+                )
+                item_hora_fin = QTableWidgetItem(
+                    "en curso" if en_curso else str(hora_fin)
+                )
+                self.tabla.setItem(fila, 4, item_hora_fin)
                 self.tabla.setItem(fila, 5, QTableWidgetItem(reg.get("duracion", "")))
                 self.tabla.setItem(fila, 6, QTableWidgetItem("0%"))
                 self.tabla.setItem(fila, 7, QTableWidgetItem("+"))
 
-                # Añadir a la lista interna para que los totales se actualicen
+                if en_curso:
+                    for columna in range(self.tabla.columnCount()):
+                        item = self.tabla.item(fila, columna)
+                        if item:
+                            item.setForeground(QBrush(QColor("#10a878")))
+                            fuente = QFont(item.font())
+                            fuente.setBold(True)
+                            item.setFont(fuente)
+
+                # Añadir a la lista interna
                 self._registros.append(reg)
+                filas_nuevas = True
 
-            # Actualizar totales y gráficos al instante
-            self._actualizar_resumen()
-            self._actualizar_linea_tiempo()
-            self._actualizar_seleccion()
-
+            if filas_nuevas:
+                self._actualizar_resumen()
+                self._actualizar_linea_tiempo()
+                self._actualizar_seleccion()
     # ------------------------------------------------------------
     def _get_cb(self):
         """Devuelve el callback válido, recuperándolo del padre si hace falta."""
@@ -554,8 +741,12 @@ class VentanaRastreadorAuto(QDialog):
         self.toolbar = BarraHerramientas()
         self.toolbar.buscador.textChanged.connect(self._filtrar)
         self.toolbar.btn_refresh.clicked.connect(self._refresh_manual)
-        self.toolbar.btn_export.clicked.connect(self._exportar_excel)
-        self.toolbar.btn_pdf.clicked.connect(self._exportar_pdf)
+        self.toolbar.btn_export.clicked.connect(
+            lambda checked=False: self._exportar_excel()
+        )
+        self.toolbar.btn_pdf.clicked.connect(
+            lambda checked=False: self._exportar_pdf()
+        )
         lay.addWidget(self.toolbar)
 
         # 4) Split
@@ -610,6 +801,23 @@ class VentanaRastreadorAuto(QDialog):
         inf_lay.addStretch()
         inf_lay.addWidget(self.lbl_actualizado)
         inf_lay.addWidget(self.lbl_total)
+            # --- Botones de Paginación ---
+        self.btn_prev_page = QPushButton("‹ Anterior")
+        self.btn_prev_page.setObjectName("btnAccion")
+        self.btn_prev_page.clicked.connect(self._pagina_anterior)
+        self.btn_prev_page.setEnabled(False)
+
+        self.lbl_pagina = QLabel("Página 1 de 1")
+        self.lbl_pagina.setObjectName("textoInferior")
+
+        self.btn_next_page = QPushButton("Siguiente ›")
+        self.btn_next_page.setObjectName("btnAccion")
+        self.btn_next_page.clicked.connect(self._pagina_siguiente)
+        self.btn_next_page.setEnabled(False)
+
+        inf_lay.addWidget(self.btn_prev_page)
+        inf_lay.addWidget(self.lbl_pagina)
+        inf_lay.addWidget(self.btn_next_page)
         lay.addWidget(inferior)
 
     # ------------------------------------------------------------
@@ -701,13 +909,32 @@ class VentanaRastreadorAuto(QDialog):
                 item_url.setToolTip(reg["url"])
             t.setItem(fila, 2, item_url)
 
+            hora_fin = reg.get("hora_fin")
+            en_curso = (
+                hora_fin is None
+                or not str(hora_fin).strip()
+                or str(hora_fin).strip().lower() == "en curso"
+            )
             t.setItem(fila, 3, QTableWidgetItem(reg.get("hora_inicio", "")))
-            t.setItem(fila, 4, QTableWidgetItem(reg.get("hora_fin", "")))
+            t.setItem(
+                fila,
+                4,
+                QTableWidgetItem("en curso" if en_curso else str(hora_fin)),
+            )
             t.setItem(fila, 5, QTableWidgetItem(reg.get("duracion", "")))
             t.setItem(fila, 6, QTableWidgetItem(
                 f"{int((reg.get('inactividad') or 0) * 100)}%"
             ))
             t.setItem(fila, 7, QTableWidgetItem("+"))
+
+            if en_curso:
+                for columna in range(t.columnCount()):
+                    item = t.item(fila, columna)
+                    if item:
+                        item.setForeground(QBrush(QColor("#10a878")))
+                        fuente = QFont(item.font())
+                        fuente.setBold(True)
+                        item.setFont(fuente)
 
     def _pintar_tabla_grupo(self, grupo):
         t = self.tabla_grupo
@@ -724,9 +951,36 @@ class VentanaRastreadorAuto(QDialog):
             t.setItem(fila, 1, QTableWidgetItem(f"{g.get('uso_pct', 0):.1f} %"))
             t.setItem(fila, 2, QTableWidgetItem(g.get("total_str", "")))
 
+    @classmethod
+    def _formatear_total_duracion(cls, valor, fallback_segundos=0):
+        if valor is None:
+            total_seg = fallback_segundos
+        elif isinstance(valor, str):
+            texto = valor.strip()
+            if not texto or texto == "—":
+                total_seg = fallback_segundos
+            elif ":" in texto:
+                return texto
+            else:
+                try:
+                    total_seg = int(float(texto))
+                except ValueError:
+                    return texto
+        else:
+            total_seg = int(float(valor))
+
+        horas, resto = divmod(max(0, total_seg), 3600)
+        minutos, segundos = divmod(resto, 60)
+        return f"{horas:02d}:{minutos:02d}:{segundos:02d}"
+
     # ------------------------------------------------------------
     def _actualizar_resumen(self):
-        if not self._registros:
+        if (
+            not self._registros
+            and self._hora_inicio_dia in (None, "")
+            and self._hora_fin_dia in (None, "")
+            and self._total_duracion in (None, "", "—")
+        ):
             self.barra_info.set_resumen("—", "—", "—")
             self.lbl_total.setText("Total 0h 0m")
             return
@@ -736,26 +990,27 @@ class VentanaRastreadorAuto(QDialog):
         fines = [r["hora_fin"] for r in self._registros
                  if r["hora_fin"] not in ("", "—", "en curso")]
 
-        inicio = min(inicios) if inicios else "—"
-        fin = max(fines) if fines else "—"
+        inicio = (
+            self._hora_inicio_dia
+            if self._hora_inicio_dia not in (None, "")
+            else (min(inicios) if inicios else "—")
+        )
+        fin = (
+            self._hora_fin_dia
+            if self._hora_fin_dia not in (None, "")
+            else (max(fines) if fines else "—")
+        )
 
-        total_seg = sum(
+        total_pagina_seg = sum(
             self._parse_duracion(r.get("duracion", ""))
             for r in self._registros
         )
+        dur_humano = self._formatear_total_duracion(
+            self._total_duracion,
+            fallback_segundos=total_pagina_seg,
+        )
 
-        # Formato legible arriba: "16m 30s" o "1h 05m"
-        if total_seg < 60:
-            dur_humano = f"{total_seg}s"
-        elif total_seg < 3600:
-            m, s = divmod(total_seg, 60)
-            dur_humano = f"{m}m {s:02d}s"
-        else:
-            h, resto = divmod(total_seg, 3600)
-            m, s = divmod(resto, 60)
-            dur_humano = f"{h}h {m:02d}m"
-
-        self.barra_info.set_resumen(inicio, fin, dur_humano)
+        self.barra_info.set_resumen(str(inicio), str(fin), dur_humano)
         self.lbl_total.setText(f"Total {dur_humano}")
 
     def _actualizar_linea_tiempo(self):
@@ -797,48 +1052,84 @@ class VentanaRastreadorAuto(QDialog):
 
     # ------------------------------------------------------------
     def _recargar_fecha(self, qdate: QDate):
-        """Se dispara al cambiar la fecha. Pide datos reales."""
+        """Se dispara al cambiar la fecha. Pide datos reales paginados."""
+        self._solicitar_carga(qdate)
+
+    def _solicitar_carga(self, qdate: QDate):
         cb = self._get_cb()
         if cb is None:
             print("[VISOR] ⚠️  No hay callback para recargar")
             return
+
+        if self._carga_en_curso:
+            self._carga_pendiente = True
+            return
+
         fecha_iso = qdate.toString("yyyy-MM-dd")
+        kwargs = {
+            "page": self._pagina_actual,
+            "limit": self._registros_por_pagina,
+        }
+        if self._usuario_id:
+            kwargs["usuario_id_objetivo"] = self._usuario_id
+
+        self._workers = [worker for worker in self._workers if worker.isRunning()]
+        worker = ApiWorker(cb, fecha_iso, **kwargs)
+        worker.exito.connect(self._on_datos_cargados)
+        worker.error.connect(self._on_error_carga)
+        self._workers.append(worker)
+        self._carga_en_curso = True
+        worker.start()
+
+    def _on_datos_cargados(self, datos):
         try:
-            # Si self._usuario_id existe (Modo Admin), consultamos los datos de ESE usuario
-            if self._usuario_id:
-                registros, grupo = cb(fecha_iso, usuario_id_objetivo=self._usuario_id)
+            if isinstance(datos, dict):
+                self._registros = datos.get("registros", [])
+                self._grupo = datos.get("grupo", [])
+                self._total_registros = datos.get("total", 0)
+                self._total_paginas = datos.get("total_pages", 1)
+                print(
+                    f"[DEBUG] Totales: {datos.get('total_iniciado')}, "
+                    f"{datos.get('total_finalizado')}, "
+                    f"{datos.get('total_duracion')}"
+                )
+                self._total_iniciado = datos.get("total_iniciado", 0)
+                self._total_finalizado = datos.get("total_finalizado", 0)
+                self._total_duracion = datos.get("total_duracion", "—")
+                self._hora_inicio_dia = datos.get("hora_inicio_dia")
+                self._hora_fin_dia = datos.get("hora_fin_dia")
             else:
-                registros, grupo = cb(fecha_iso)
+                self._registros, self._grupo = datos
+                self._total_registros = len(self._registros)
+                self._total_paginas = 1
+                self._total_iniciado = 0
+                self._total_finalizado = 0
+                self._total_duracion = "—"
+                self._hora_inicio_dia = None
+                self._hora_fin_dia = None
+
+            self._actualizar_label_pagina()
+            self.cargar_datos(self._registros, self._grupo)
+            self._ultima_actualizacion = datetime.now().strftime("%H:%M:%S")
+            self._actualizar_label_actualizado()
         except Exception as e:
             print(f"[Rastreador] Error cargando datos: {e}")
-            registros, grupo = [], []
-        self.cargar_datos(registros, grupo)
-        self._ultima_actualizacion = datetime.now().strftime("%H:%M:%S")
-        self._actualizar_label_actualizado()
+        finally:
+            self._finalizar_carga()
+
+    def _on_error_carga(self, mensaje):
+        print(f"[Rastreador] Error cargando datos: {mensaje}")
+        self._finalizar_carga()
+
+    def _finalizar_carga(self):
+        self._carga_en_curso = False
+        if self._carga_pendiente:
+            self._carga_pendiente = False
+            self._solicitar_carga(self.barra_info.fecha.date())
 
     def _refresh_manual(self):
-        """Actualización manual disparada por el botón."""
-        print("[VISOR] 🔄 Refresh manual solicitado")
-        cb = self._get_cb()
-        if cb is None:
-            print("[VISOR] ⚠️  Sin callback, no puedo recargar")
-            return
-        qdate = self.barra_info.fecha.date()
-        fecha_iso = qdate.toString("yyyy-MM-dd")
-        try:
-            if self._usuario_id:
-                registros, grupo = cb(fecha_iso, usuario_id_objetivo=self._usuario_id)
-            else:
-                registros, grupo = cb(fecha_iso)
-        except Exception as e:
-            print(f"[Rastreador] Error cargando datos: {e}")
-            return
-
-        self.cargar_datos(registros, grupo)
-
-        self._ultima_actualizacion = datetime.now().strftime("%H:%M:%S")
-        self._actualizar_label_actualizado()
-        print(f"[VISOR] 🔄 Manual: {len(registros)} registros cargados")
+        print("[VISOR]  Refresh manual solicitado")
+        self._solicitar_carga(self.barra_info.fecha.date())
 
     def _auto_refresh(self):
         """Recarga silenciosamente los datos si estamos en el día de hoy."""
@@ -846,32 +1137,7 @@ class VentanaRastreadorAuto(QDialog):
         if qdate != QDate.currentDate():
             return
 
-        cb = self._get_cb()
-        if cb is None:
-            return
-
-        n_antes = len(getattr(self, "_registros", []))
-
-        fecha_iso = qdate.toString("yyyy-MM-dd")
-        try:
-            if self._usuario_id:
-                registros, grupo = cb(fecha_iso, usuario_id_objetivo=self._usuario_id)
-            else:
-                registros, grupo = cb(fecha_iso)
-        except Exception as e:
-            print(f"[Rastreador] Error cargando datos: {e}")
-            return
-
-        self.cargar_datos(registros, grupo)
-
-        n_despues = len(self._registros)
-        self._ultima_actualizacion = datetime.now().strftime("%H:%M:%S")
-
-        delta = n_despues - n_antes
-        print(f"[VISOR] ⏱️  auto_refresh {self._ultima_actualizacion} — "
-              f"{n_despues} registros ({'+' if delta >= 0 else ''}{delta})")
-
-        self._actualizar_label_actualizado()
+        self._solicitar_carga(qdate)
 
     def _actualizar_label_actualizado(self):
         """Actualiza el label de la barra inferior con la hora del último refresh."""
@@ -884,171 +1150,191 @@ class VentanaRastreadorAuto(QDialog):
     def _mover_dia(self, delta):
         self.barra_info.fecha.setDate(self.barra_info.fecha.date().addDays(delta))
 
-    # ------------------------------------------------------------
-    def _exportar_excel(self):
-        """Exporta los registros actuales a un archivo .xlsx."""
-        if not self._registros:
-            print("[VISOR] ⚠️  No hay registros para exportar")
-            return
-
-        try:
-            from openpyxl import Workbook
-            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-        except ImportError:
-            print("[VISOR] ⚠️  Falta openpyxl. Instala: pip install openpyxl")
-            return
-
-        fecha_str = self.barra_info.fecha.date().toString("yyyy-MM-dd")
-
-        # Nombre del usuario logueado (si existe)
-        nombre_usuario = ""
-        p = self.parent()
-        while p is not None and not hasattr(p, "usuario"):
-            p = p.parent() if hasattr(p, "parent") else None
-        if p is not None:
-            nombre_usuario = (getattr(p, "usuario", {}) or {}).get("nombre", "") or ""
-
-        # Limpiar el nombre: quitar espacios, tildes y caracteres raros para el archivo
-        if nombre_usuario:
-            nombre_limpio = (
-                nombre_usuario.strip()
-                .lower()
-                .replace(" ", "_")
-                .replace("á", "a").replace("é", "e")
-                .replace("í", "i").replace("ó", "o")
-                .replace("ú", "u").replace("ñ", "n")
+    def _solicitar_datos_exportacion(self, formato, ruta, fecha_str, usuario=None):
+        cb = self._get_cb()
+        if cb is None:
+            print("[VISOR] ⚠️  No hay callback para exportar")
+            QMessageBox.critical(
+                self,
+                "Error",
+                "No se pudo generar el reporte:\nNo hay callback para consultar los datos.",
             )
-            # Quitar caracteres no permitidos en nombres de archivo Windows
-            for c in '\\/:*?"<>|':
-                nombre_limpio = nombre_limpio.replace(c, "")
-            nombre_default = f"rastreador_{nombre_limpio}_{fecha_str}.xlsx"
-        else:
-            nombre_default = f"rastreador_{fecha_str}.xlsx"
-        ruta, _ = QFileDialog.getSaveFileName(
-            self,
-            "Guardar registros como Excel",
-            nombre_default,
-            "Excel (*.xlsx);;Todos los archivos (*)",
-        )
-        if not ruta:
             return
-        if not ruta.lower().endswith(".xlsx"):
-            ruta += ".xlsx"
 
-        wb = Workbook()
+        kwargs = {"page": 1, "limit": 10000}
+        if self._usuario_id:
+            kwargs["usuario_id_objetivo"] = self._usuario_id
 
-        # HOJA 1
-        ws = wb.active
-        ws.title = "Registros detallados"
+        self._workers = [worker for worker in self._workers if worker.isRunning()]
+        worker = ApiWorker(cb, fecha_str, **kwargs)
+        worker.exito.connect(
+            lambda datos: self._on_datos_exportacion_cargados(
+                datos, formato, ruta, fecha_str, usuario or self._usuario
+            )
+        )
+        worker.error.connect(
+            lambda mensaje: self._on_error_exportacion(mensaje)
+        )
+        self._workers.append(worker)
+        worker.start()
 
-        fuente_header = Font(bold=True, color="FFFFFF", size=11)
-        fondo_header = PatternFill("solid", fgColor="1F4E78")
-        alineacion = Alignment(horizontal="left", vertical="center")
-        borde = Border(
-            left=Side(style="thin", color="CCCCCC"),
-            right=Side(style="thin", color="CCCCCC"),
-            top=Side(style="thin", color="CCCCCC"),
-            bottom=Side(style="thin", color="CCCCCC"),
+    def _on_datos_exportacion_cargados(
+        self, datos, formato, ruta, fecha_str, usuario
+    ):
+        if isinstance(datos, dict):
+            registros = datos.get("registros", [])
+            grupo = datos.get("grupo", [])
+        else:
+            registros, grupo = datos
+
+        if not registros:
+            print("[VISOR] ⚠️  No hay registros para exportar")
+            self.lbl_actualizado.setText("● No hay registros para exportar")
+            QMessageBox.warning(
+                self, "Sin datos", "No hay registros para exportar."
+            )
+            return
+
+        if formato == "excel":
+            self._exportar_excel(
+                ruta, registros, grupo, datos, fecha_str, usuario
+            )
+        else:
+            self._exportar_pdf(ruta, registros, grupo, fecha_str, usuario)
+
+    def _iniciar_worker_exportacion(self, funcion, ruta, *args):
+        self._workers = [worker for worker in self._workers if worker.isRunning()]
+        worker = ApiWorker(funcion, ruta, *args)
+        worker.exito.connect(self._on_exportacion_exitosa)
+        worker.error.connect(self._on_error_exportacion)
+        self._workers.append(worker)
+        self.lbl_actualizado.setText("● Generando reporte...")
+        worker.start()
+
+    def _mostrar_mensaje_exportacion(self, icono, titulo, mensaje):
+        dialogo = QMessageBox(icono, titulo, mensaje, QMessageBox.Ok, self)
+        dialogo.setAttribute(Qt.WA_DeleteOnClose)
+        dialogo.open()
+
+    def _on_exportacion_exitosa(self, ruta):
+        print(f"[VISOR] Reporte exportado a: {ruta}")
+        self.lbl_actualizado.setText(f"● Reporte exportado: {ruta}")
+        self._mostrar_mensaje_exportacion(
+            QMessageBox.Information,
+            "Éxito",
+            f"Reporte exportado a:\n{ruta}",
         )
 
-        ws["A1"] = "Rastreador automático"
-        ws["A1"].font = Font(bold=True, size=14)
-        ws["A2"] = f"Fecha: {fecha_str}"
-        ws["A3"] = f"Iniciado: {self.barra_info.lbl_iniciado.itemAt(1).widget().text()}"
-        ws["A4"] = f"Finalizado: {self.barra_info.lbl_finalizado.itemAt(1).widget().text()}"
-        ws["A5"] = f"Duración total: {self.barra_info.lbl_duracion.itemAt(1).widget().text()}"
-        ws["A6"] = f"Total registros: {len(self._registros)}"
-
-        fila_header = 8
-        cabeceras = [
-            "Aplicación", "Descripción", "URL",
-            "Hora de inicio", "Hora de final", "Duración",
-            "Inactividad", "Agregar como",
-        ]
-        for col, titulo in enumerate(cabeceras, start=1):
-            celda = ws.cell(row=fila_header, column=col, value=titulo)
-            celda.font = fuente_header
-            celda.fill = fondo_header
-            celda.alignment = alineacion
-            celda.border = borde
-
-        for i, reg in enumerate(self._registros, start=fila_header + 1):
-            valores = [
-                reg.get("app", ""),
-                reg.get("descripcion", ""),
-                reg.get("url", ""),
-                reg.get("hora_inicio", ""),
-                reg.get("hora_fin", ""),
-                reg.get("duracion", ""),
-                f"{int((reg.get('inactividad') or 0) * 100)}%",
-                "+",
-            ]
-            for col, valor in enumerate(valores, start=1):
-                celda = ws.cell(row=i, column=col, value=valor)
-                celda.border = borde
-
-        anchos = [18, 35, 50, 14, 14, 12, 12, 14]
-        for col, ancho in enumerate(anchos, start=1):
-            letra = ws.cell(row=1, column=col).column_letter
-            ws.column_dimensions[letra].width = ancho
-
-        ws.freeze_panes = f"A{fila_header + 1}"
-
-        # HOJA 2
-        ws2 = wb.create_sheet("Vista de grupo")
-        ws2["A1"] = "Vista de grupo"
-        ws2["A1"].font = Font(bold=True, size=14)
-        ws2["A2"] = f"Fecha: {fecha_str}"
-
-        fila_h2 = 4
-        cabeceras2 = ["Aplicación", "Uso (%)", "Total"]
-        for col, titulo in enumerate(cabeceras2, start=1):
-            celda = ws2.cell(row=fila_h2, column=col, value=titulo)
-            celda.font = fuente_header
-            celda.fill = fondo_header
-            celda.alignment = alineacion
-            celda.border = borde
-
-        for i, g in enumerate(self._grupo, start=fila_h2 + 1):
-            valores = [
-                g.get("app", ""),
-                g.get("uso_pct", 0),
-                g.get("total_str", ""),
-            ]
-            for col, valor in enumerate(valores, start=1):
-                celda = ws2.cell(row=i, column=col, value=valor)
-                celda.border = borde
-
-        ws2.column_dimensions["A"].width = 25
-        ws2.column_dimensions["B"].width = 12
-        ws2.column_dimensions["C"].width = 14
-        ws2.freeze_panes = f"A{fila_h2 + 1}"
-
-        try:
-            wb.save(ruta)
-            print(f"[VISOR]  Exportado a: {ruta}")
-            self.lbl_actualizado.setText(f"● Exportado {datetime.now().strftime('%H:%M:%S')}")
-        except PermissionError:
-            print(f"[VISOR] ❌ No puedo escribir el archivo. ¿Está abierto en Excel?")
-        except Exception as e:
-            print(f"[VISOR] ❌ Error guardando: {e}")
+    def _on_error_exportacion(self, mensaje):
+        print(f"[VISOR] Error al procesar la exportación: {mensaje}")
+        self.lbl_actualizado.setText("● Error al generar reporte")
+        self._mostrar_mensaje_exportacion(
+            QMessageBox.Critical,
+            "Error",
+            f"No se pudo generar el reporte:\n{mensaje}",
+        )
 
     # ------------------------------------------------------------
-    def _exportar_pdf(self):
-        """Exporta los registros actuales a un PDF con plantilla."""
-        if not self._registros:
+    def _exportar_excel(
+        self,
+        ruta=None,
+        registros=None,
+        grupo=None,
+        datos=None,
+        fecha_str=None,
+        usuario=None,
+    ):
+        """Exporta los registros actuales a un archivo .xlsx."""
+        if registros is None and not self._registros and not self._total_registros:
             print("[VISOR] ⚠️  No hay registros para exportar")
+            QMessageBox.warning(
+                self, "Sin datos", "No hay registros para exportar."
+            )
             return
 
-        fecha_str = self.barra_info.fecha.date().toString("yyyy-MM-dd")
+        fecha_str = fecha_str or self.barra_info.fecha.date().toString("yyyy-MM-dd")
+
+        if ruta is None:
+            usuario = self._usuario or {}
+            nombre_usuario = usuario.get("nombre", "") or ""
+            apellido = usuario.get("apellido", "") or ""
+            nombre_usuario = f"{nombre_usuario} {apellido}".strip()
+
+            if nombre_usuario:
+                nombre_limpio = (
+                    nombre_usuario.strip()
+                    .lower()
+                    .replace(" ", "_")
+                    .replace("á", "a").replace("é", "e")
+                    .replace("í", "i").replace("ó", "o")
+                    .replace("ú", "u").replace("ñ", "n")
+                )
+                for c in '\\/:*?"<>|':
+                    nombre_limpio = nombre_limpio.replace(c, "")
+                nombre_default = f"rastreador_{nombre_limpio}_{fecha_str}.xlsx"
+            else:
+                nombre_default = f"rastreador_{fecha_str}.xlsx"
+            ruta, _ = QFileDialog.getSaveFileName(
+                self,
+                "Guardar registros como Excel",
+                nombre_default,
+                "Excel (*.xlsx);;Todos los archivos (*)",
+            )
+            if not ruta:
+                return
+            if not ruta.lower().endswith(".xlsx"):
+                ruta += ".xlsx"
+            self._solicitar_datos_exportacion("excel", ruta, fecha_str)
+            return
+
+        registros = registros if registros is not None else self._registros
+        grupo = grupo if grupo is not None else self._grupo
+        iniciado = datos.get("total_iniciado") if isinstance(datos, dict) else None
+        finalizado = datos.get("total_finalizado") if isinstance(datos, dict) else None
+        duracion = datos.get("total_duracion") if isinstance(datos, dict) else None
+        iniciado_texto = str(
+            iniciado
+            if iniciado not in (None, "")
+            else self.barra_info.lbl_iniciado.itemAt(1).widget().text()
+        )
+        finalizado_texto = str(
+            finalizado
+            if finalizado not in (None, "")
+            else self.barra_info.lbl_finalizado.itemAt(1).widget().text()
+        )
+        duracion_texto = (
+            self._formatear_total_duracion(duracion)
+            if duracion is not None
+            else self.barra_info.lbl_duracion.itemAt(1).widget().text()
+        )
+        self._iniciar_worker_exportacion(
+            _generar_excel_exportacion,
+            ruta,
+            registros,
+            grupo,
+            fecha_str,
+            iniciado_texto,
+            finalizado_texto,
+            duracion_texto,
+            usuario or self._usuario or {},
+        )
+
+    # ------------------------------------------------------------
+    def _exportar_pdf(
+        self, ruta=None, registros=None, grupo=None, fecha_str=None, usuario=None
+    ):
+        """Exporta los registros actuales a un PDF con plantilla."""
+        if registros is None and not self._registros and not self._total_registros:
+            print("[VISOR] ⚠️  No hay registros para exportar")
+            QMessageBox.warning(
+                self, "Sin datos", "No hay registros para exportar."
+            )
+            return
+
+        fecha_str = fecha_str or self.barra_info.fecha.date().toString("yyyy-MM-dd")
 
         # Nombre de archivo sugerido
-        usuario = {}
-        p = self.parent()
-        while p is not None and not hasattr(p, "usuario"):
-            p = p.parent() if hasattr(p, "parent") else None
-        if p is not None:
-            usuario = getattr(p, "usuario", {}) or {}
+        usuario = usuario or self._usuario or {}
 
         nombre_limpio = (
             f"{usuario.get('nombre', 'usuario')}_{usuario.get('apellido', '')}"
@@ -1067,37 +1353,31 @@ class VentanaRastreadorAuto(QDialog):
         carpeta_documentos = Path(os.path.expanduser("~")) / "Documents"
         carpeta_documentos.mkdir(parents=True, exist_ok=True)
         ruta_sugerida = carpeta_documentos / nombre_default
-        ruta, _ = QFileDialog.getSaveFileName(
-            self,
-            "Guardar informe como PDF",
-            str(ruta_sugerida),
-            "PDF (*.pdf);;Todos los archivos (*)",
-        )
-        
-        if not ruta:
-            return
-        if not ruta.lower().endswith(".pdf"):
-            ruta += ".pdf"
-
-        try:
-            ok = exportar_informe_pdf(
-                ruta_salida=ruta,
-                usuario=usuario,
-                fecha_iso=fecha_str,
-                registros=self._registros,
-                grupo=self._grupo,
+        if ruta is None:
+            ruta, _ = QFileDialog.getSaveFileName(
+                self,
+                "Guardar informe como PDF",
+                str(ruta_sugerida),
+                "PDF (*.pdf);;Todos los archivos (*)",
             )
-            if ok:
-                print(f"[VISOR]  PDF exportado a: {ruta}")
-                self.lbl_actualizado.setText(
-                    f"● PDF {datetime.now().strftime('%H:%M:%S')}"
-                )
-            else:
-                print("[VISOR] ❌ Error generando PDF")
-                self.lbl_actualizado.setText("● Error al generar PDF")
-        except Exception as e:
-            print(f"[VISOR] ❌ Error generando PDF: {e}")
-            self.lbl_actualizado.setText("● Error al generar PDF")
+            if not ruta:
+                return
+            if not ruta.lower().endswith(".pdf"):
+                ruta += ".pdf"
+            self._solicitar_datos_exportacion("pdf", ruta, fecha_str, usuario)
+            return
+
+        registros = registros if registros is not None else self._registros
+        grupo = grupo if grupo is not None else self._grupo
+
+        self._iniciar_worker_exportacion(
+            _generar_pdf_exportacion,
+            ruta,
+            usuario,
+            fecha_str,
+            registros,
+            grupo,
+        )
     def closeEvent(self, event):
         """Detiene el auto-refresh al cerrar el visor."""
         if hasattr(self, "_timer_refresh"):
@@ -1111,6 +1391,16 @@ class VentanaRastreadorAuto(QDialog):
             QTimer.singleShot(200, lambda: None)
         
         super().closeEvent(event)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if hasattr(self, "_timer_refresh"):
+            self._timer_refresh.start(5000)
+
+    def hideEvent(self, event):
+        if hasattr(self, "_timer_refresh"):
+            self._timer_refresh.stop()
+        super().hideEvent(event)
 
     # ------------------------------------------------------------
     @staticmethod
@@ -1132,3 +1422,25 @@ class VentanaRastreadorAuto(QDialog):
             return int(hh) + int(mm) / 60.0
         except (ValueError, AttributeError):
             return None
+    def _actualizar_label_pagina(self):
+        if hasattr(self, "lbl_pagina"):
+            self.lbl_pagina.setText(f"Página {self._pagina_actual} de {self._total_paginas} (Total: {self._total_registros})")
+        if hasattr(self, "btn_prev_page"):
+            self.btn_prev_page.setEnabled(self._pagina_actual > 1)
+        if hasattr(self, "btn_next_page"):
+            self.btn_next_page.setEnabled(self._pagina_actual < self._total_paginas)
+
+    def _pagina_anterior(self):
+        if self._pagina_actual > 1:
+            self._pagina_actual -= 1
+            self._recargar_fecha(self.barra_info.fecha.date())
+
+    def _ir_a_ultima_pagina(self):
+        if self._total_paginas > 1:
+            self._pagina_actual = self._total_paginas
+            self._recargar_fecha(self.barra_info.fecha.date())
+
+    def _pagina_siguiente(self):
+        if self._pagina_actual < self._total_paginas:
+            self._pagina_actual += 1
+            self._recargar_fecha(self.barra_info.fecha.date())

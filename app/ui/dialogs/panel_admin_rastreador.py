@@ -187,8 +187,13 @@ QPushButton#btnVivo:pressed {
             btn = QPushButton("Visualizar Rastreador")
             btn.setObjectName("btnVivo")
             btn.setCursor(Qt.PointingHandCursor)
+            usuario = {
+                campo: u.get(campo)
+                for campo in ("id", "nombre", "apellido", "email")
+            }
             btn.clicked.connect(
-                lambda checked=False, uid=u.get("id"), nombre=u.get("nombre"): self._abrir_monitor(uid, nombre)
+                lambda checked=False, uid=u.get("id"), nombre=u.get("nombre"), datos=usuario:
+                self._abrir_monitor(uid, nombre, datos)
             )
 
             contenedor = QWidget()
@@ -197,7 +202,7 @@ QPushButton#btnVivo:pressed {
             lay.addWidget(btn)
             self.tabla.setCellWidget(fila, 3, contenedor)
 
-    def _abrir_monitor(self, usuario_id, nombre):
+    def _abrir_monitor(self, usuario_id, nombre, usuario=None):
         """Abre la ventana del rastreador conectada al WebSocket de este usuario."""
         if usuario_id in self._ventanas_vivo and self._ventanas_vivo[usuario_id].isVisible():
             self._ventanas_vivo[usuario_id].raise_()
@@ -220,7 +225,8 @@ QPushButton#btnVivo:pressed {
             cargar_datos_cb=cb,           
             usuario_id=usuario_id,
             registros=[],  
-            grupo=[]
+            grupo=[],
+            usuario=usuario or {},
         )
         ventana.setWindowTitle(f"Monitoreo en Vivo: {nombre}")
         

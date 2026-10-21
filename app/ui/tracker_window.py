@@ -834,13 +834,27 @@ class TrackerWindow(QWidget):
             return
 
         app_lower = (info.get("app") or "").lower()
+        duracion_seg = int(info.get("duracion_seg") or 0)
+        apps_ignorar_cortas = {
+            "explorer.exe",
+            "searchapp.exe",
+            "startmenuexperiencehost.exe",
+            "shellexperiencehost.exe",
+        }
+        if app_lower in apps_ignorar_cortas and duracion_seg < 3:
+            print(
+                f"[Rastreador] Segmento corto ignorado: "
+                f"{app_lower} ({duracion_seg}s)"
+            )
+            return
+
         payload = {
             "aplicacion": info.get("app") or "desconocido",
             "descripcion": info.get("descripcion") or info.get("titulo") or "",
             "url": info.get("url") or None,
             "hora_inicio": info.get("inicio"),
             "hora_fin": info.get("fin"),
-            "duracion_segundos": int(info.get("duracion_seg") or 0),
+            "duracion_segundos": duracion_seg,
             "inactividad_pct": 0.0,
             "color": COLORES_POR_APP.get(app_lower, COLOR_POR_DEFECTO),
         }
@@ -941,45 +955,46 @@ class TrackerWindow(QWidget):
         return candidatas[0][1]
 
     # -------- Método principal --------
-    def obtener_registros_rastreador(self, fecha_iso=None, usuario_id_objetivo=None):
+    def obtener_registros_rastreador(self, fecha_iso=None, usuario_id_objetivo=None, page=1, limit=50):
         if fecha_iso is None:
             fecha_iso = date.today().isoformat()
 
-        # Si nos pasan un usuario_id_objetivo (modo Admin), usamos el endpoint de admin
+        # --- MODO ADMIN ---
         if usuario_id_objetivo is not None:
             try:
-                datos = self.client.obtener_actividad_dia_admin(usuario_id_objetivo, fecha_iso)
-                return datos.get("registros", []), datos.get("grupo", [])
+                datos = self.client.obtener_actividad_dia_admin(
+                    usuario_id_objetivo, fecha_iso, page=page, limit=limit
+                )
+                return datos
             except Exception as e:
                 print(f"[VISOR] Error consultando actividad de {usuario_id_objetivo}: {e}")
-                return [], []
+                return {"registros": [], "grupo": [], "total": 0, "page": 1, "limit": limit, "total_pages": 1}
 
+        # --- MODO NORMAL (usuario viendo su propio historial) ---
         uid = self.usuario.get("id")
-        
-        # ============================================================
-        # 1. CONSULTAR AL BACKEND EN RENDER (Usando tu propio ApiClient)
-        # ============================================================
         try:
-            print(f"[VISOR] Consultando backend para fecha {fecha_iso}...")
-            # Llamamos al método que ya tienes en api_client.py
-            datos = self.client.obtener_actividad_dia(fecha_iso)
+            print(f"[VISOR] Consultando backend para fecha {fecha_iso} (página {page})...")
+            #  AHORA PASAMOS page Y limit, Y ESPERAMOS UN DICCIONARIO
+            datos = self.client.obtener_actividad_dia(fecha_iso, page=page, limit=limit)
             
             if datos:
-                registros = datos.get("registros", [])
-                grupo = datos.get("grupo", [])
-                print(f"[VISOR] ✅ Backend devolvió {len(registros)} registros y {len(grupo)} grupos")
-                return registros, grupo
+                # Si el backend devuelve un diccionario, lo retornamos tal cual
+                if isinstance(datos, dict):
+                    print(f"[VISOR]  Backend devolvió {len(datos.get('registros', []))} registros (Total: {datos.get('total', 0)})")
+                    return datos
+                # Si por alguna razón devuelve una tupla (fallback), la adaptamos
+                else:
+                    registros, grupo = datos
+                    return {"registros": registros, "grupo": grupo, "total": len(registros), "page": 1, "limit": limit, "total_pages": 1}
             else:
                 print("[VISOR] ⚠️ El backend devolvió datos vacíos")
-                return [], []
+                return {"registros": [], "grupo": [], "total": 0, "page": 1, "limit": limit, "total_pages": 1}
                 
         except Exception as e:
             print(f"[VISOR] ❌ Error consultando backend: {e}")
             print("[VISOR] Usando base de datos local como respaldo...")
             
-            # ============================================================
-            # 2. PLAN DE RESPALDO: Si falla la red, leer SQLite local
-            # ============================================================
+            # --- PLAN DE RESPALDO (SQLite local) ---
             try:
                 self.rastreador.db.actualizar_duracion_activa()
                 segmentos = self.rastreador.db.obtener_segmentos(uid, fecha_iso)
@@ -1012,7 +1027,16 @@ class TrackerWindow(QWidget):
 
             registros.sort(key=lambda r: (r["hora_inicio"] == "—", r["hora_inicio"]))
             grupo = self._construir_grupo(segmentos)
-            return registros, grupo
+            
+            # Devolvemos diccionario paginado (aunque sea local, respetamos el formato)
+            return {
+                "registros": registros, 
+                "grupo": grupo, 
+                "total": len(registros), 
+                "page": 1, 
+                "limit": limit, 
+                "total_pages": 1
+            }    
 
     def _construir_grupo(self, segmentos):
         acumulado = {}

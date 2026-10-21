@@ -359,10 +359,17 @@ class HeaderWidget(QWidget):
                 self._rastreador_auto = None
 
         
+        ventana_principal = self.window()
+        usuario_actual = getattr(ventana_principal, "usuario", {}) or {}
+        usuario_reporte = {
+            campo: usuario_actual.get(campo)
+            for campo in ("id", "nombre", "apellido", "email")
+        }
         self._rastreador_auto = VentanaRastreadorAuto(
             parent=None,             
             cargar_datos_cb=cb,
             usuario_id=None,
+            usuario=usuario_reporte,
         )
         self._rastreador_auto.setModal(False)   # <--- NO modal
         self._rastreador_auto.show()            # <--- show() en lugar de exec()

@@ -215,13 +215,11 @@ class ApiClient:
             json={"registros": registros},
         )
 
-    def obtener_actividad_dia(self, fecha_iso: str) -> dict:
-        """GET /rastreador/actividad/dia?fecha=YYYY-MM-DD
-        Retorna {"registros": [...], "grupo": [...]}"""
+    def obtener_actividad_dia(self, fecha_iso, page=1, limit=50):
         return self._request(
             "GET",
             "/rastreador/actividad/dia",
-            params={"fecha": fecha_iso},
+            params={"fecha": fecha_iso, "page": page, "limit": limit},
         )
         # ---------------- usuarios (Para el Admin) ----------------
     def listar_usuarios(self):
@@ -230,10 +228,10 @@ class ApiClient:
         Devuelve la lista de todos los usuarios (requiere ser admin).
         """
         return self._request("GET", "/usuarios")
-    def obtener_actividad_dia_admin(self, usuario_id, fecha_iso):
-        """Para que un Admin vea la actividad de otro usuario."""
+    def obtener_actividad_dia_admin(self, usuario_id, fecha_iso, page=1, limit=50):
+        """Para que un Admin vea la actividad de otro usuario (paginado)."""
         return self._request(
             "GET",
             f"/rastreador/actividad/dia/{usuario_id}",
-            params={"fecha": fecha_iso},
+            params={"fecha": fecha_iso, "page": page, "limit": limit},
         )
