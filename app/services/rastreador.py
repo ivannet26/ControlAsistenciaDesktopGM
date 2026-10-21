@@ -397,10 +397,36 @@ class RastreadorAuto(QObject):
                 self._url_actual = ""
             return
 
+        # --- NUEVO: Detectar si cambió la ventana ---
+        cambio_de_ventana = (app != self._app_actual or titulo != self._titulo_actual)
+
         # Capturar URL real si es navegador (delegado al hilo)
         if app in NAVEGADORES_CONOCIDOS:
             self._hilo_url.set_app(app)
-            url_real = self._url_actual # Usamos la última URL que leyó el hilo
+            
+            # Si cambió la ventana, esperamos un poco para que el hilo actualice la URL
+            if cambio_de_ventana:
+                # Guardamos el segmento anterior ANTES de cambiar
+                if self._id_segmento is not None:
+                    self.db.cerrar_segmento_activo(self.usuario_id)
+                    seg = self.db.obtener_segmento_por_id(self._id_segmento)
+                    if seg:
+                        try:
+                            self.segmento_cerrado.emit(seg)
+                        except Exception as e:
+                            print(f"[Rastreador] Error emitiendo: {e}")
+                
+                # Resetamos la URL actual para que no se use la anterior
+                self._url_actual = ""
+                
+                # Le damos tiempo al hilo para leer la nueva URL (500ms)
+                time.sleep(0.5)
+                
+                # Volvemos a llamar a _muestrear para crear el nuevo segmento con la URL correcta
+                QTimer.singleShot(600, self._muestrear)
+                return
+            
+            url_real = self._url_actual 
         else:
             self._hilo_url.set_app("")
             url_real = ""
@@ -414,30 +440,19 @@ class RastreadorAuto(QObject):
             self.db.actualizar_duracion_activa()
             return
 
-        # Cambio → cerramos anterior
-        if self._id_segmento is not None:
-            self.db.cerrar_segmento_activo(self.usuario_id)
-            seg = self.db.obtener_segmento_por_id(self._id_segmento)
-            if seg:
-                try:
-                    self.segmento_cerrado.emit(seg)
-                except Exception as e:
-                    print(f"[Rastreador] Error emitiendo: {e}")
-
-        # Nuevo segmento CON usuario_id
+        # Nuevo segmento
         descripcion = self._descripcion_amigable(app, titulo)
         self._app_actual = app
         self._titulo_actual = titulo
         self._url_actual = url_real
         self._id_segmento = self.db.crear_segmento(
-            usuario_id=self.usuario_id,   # 🔑
+            usuario_id=self.usuario_id,
             app=app,
             titulo=titulo,
             descripcion=descripcion,
             url=url_real,
         )
         print(f"[Rastreador] NUEVO segmento {self._id_segmento} → {app} | {titulo[:40]} | URL={url_real[:60]}")
-
     def _descripcion_amigable(self, app: str, titulo: str) -> str:
         """'chrome.exe' + 'Instagram - Google Chrome' → 'Instagram'."""
         if app in NAVEGADORES_CONOCIDOS:

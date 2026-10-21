@@ -418,7 +418,7 @@ class VentanaRastreadorAuto(QDialog):
         self._ultima_actualizacion = "—"
         self._usuario_id = usuario_id  
         self.setWindowTitle("Rastreador automático")
-        self.setModal(True)
+        self.setModal(False)
         self.setWindowFlag(Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setMinimumSize(1000, 620)
@@ -436,7 +436,7 @@ class VentanaRastreadorAuto(QDialog):
         # ⏱️ Auto-refresh cada 5 segundos
         self._timer_refresh = QTimer(self)
         self._timer_refresh.timeout.connect(self._auto_refresh)
-        self._timer_refresh.start(5000)
+        self._timer_refresh.start(2000)
         print(f"[VISOR] QTimer arrancado — activo={self._timer_refresh.isActive()}")
 
         # ============================================================

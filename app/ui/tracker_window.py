@@ -44,7 +44,7 @@ INTERVALO_HEARTBEAT_MS = 5000
 INTERVALO_PING_MS = 60_000
 
 # Intervalo de muestreo del rastreador automático (segundos)
-INTERVALO_RASTREADOR_SEG = 2
+INTERVALO_RASTREADOR_SEG = 1
 
 # Ventana máxima hacia atrás para asociar una URL a un segmento (segundos)
 VENTANA_URL_MAX_SEG = 300

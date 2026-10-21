@@ -12,15 +12,17 @@ class PanelAdminRastreador(QDialog):
     ALTO_FILA = 48
     ANCHO_ACCIONES = 210
 
-    def __init__(self, client, parent=None):
+    def __init__(self, client, parent=None, tracker_window=None):
         super().__init__(parent)
         self.client = client
+        self.tracker_window = tracker_window  
         self._ventanas_vivo = {}
 
         self.setWindowTitle("Panel de Administración - Monitoreo en Vivo")
         self.setWindowFlag(Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.resize(900, 600)
+
 
         self.setStyleSheet("""
             QDialog {
@@ -204,23 +206,18 @@ QPushButton#btnVivo:pressed {
 
         print(f"[ADMIN] Abriendo monitor en vivo para {nombre} (ID: {usuario_id})")
         
-        # --- BUSCAMOS EL CALLBACK SUBIENDO POR TODA LA CADENA DE PADRES ---
-        tracker_window = self
+        # --- USAMOS LA REFERENCIA QUE GUARDAMOS EN EL __init__ ---
         cb = None
-        while tracker_window is not None:
-            if hasattr(tracker_window, "obtener_registros_rastreador"):
-                cb = tracker_window.obtener_registros_rastreador
-                print("[ADMIN] ✓ Callback encontrado en:", tracker_window.__class__.__name__)
-                break
-            tracker_window = tracker_window.parent() if hasattr(tracker_window, "parent") else None
-        
-        if cb is None:
-            print("[ADMIN] ⚠️ No se encontró el TrackerWindow o su método de carga")
+        if self.tracker_window and hasattr(self.tracker_window, "obtener_registros_rastreador"):
+            cb = self.tracker_window.obtener_registros_rastreador
+            print("[ADMIN] ✓ Callback encontrado")
+        else:
+            print("[ADMIN] ⚠️ No se encontró el TrackerWindow")
 
-        # Creamos la ventana SIN parent (para que sea independiente) pero CON callback
+        # Creamos la ventana SIN parent (independiente) pero CON callback
         ventana = VentanaRastreadorAuto(
-            parent=None,                  # <--- Independiente
-            cargar_datos_cb=cb,           # <--- AQUÍ PASAMOS EL CALLBACK
+            parent=None,                  
+            cargar_datos_cb=cb,           
             usuario_id=usuario_id,
             registros=[],  
             grupo=[]

@@ -335,7 +335,7 @@ class HeaderWidget(QWidget):
     def _abrir_rastreador_auto(self):
         from app.ui.dialogs.rastreador_auto import VentanaRastreadorAuto
 
-        # Buscar el TrackerWindow subiendo por la cadena de padres
+        
         ventana = self
         cb = None
         while ventana is not None:
@@ -348,12 +348,24 @@ class HeaderWidget(QWidget):
             print("[Header] ⚠️  No encontré 'obtener_registros_rastreador'")
             return
 
-        dlg = VentanaRastreadorAuto(
-            parent=ventana,
+       
+        if hasattr(self, "_rastreador_auto") and self._rastreador_auto is not None:
+            try:
+                if self._rastreador_auto.isVisible():
+                    self._rastreador_auto.raise_()
+                    self._rastreador_auto.activateWindow()
+                    return
+            except RuntimeError:
+                self._rastreador_auto = None
+
+        
+        self._rastreador_auto = VentanaRastreadorAuto(
+            parent=None,             
             cargar_datos_cb=cb,
             usuario_id=None,
         )
-        dlg.exec()
+        self._rastreador_auto.setModal(False)   # <--- NO modal
+        self._rastreador_auto.show()            # <--- show() en lugar de exec()
     def _on_actualizar(self):
         """Recarga los datos del tracker (historial, proyectos, etc.)."""
         # Buscamos la TrackerWindow padre y llamamos a su método
@@ -391,8 +403,8 @@ class HeaderWidget(QWidget):
         # 2. Si llegamos aquí, creamos una nueva instancia
         self._panel_admin = PanelAdminRastreador(
             client=client, 
-            parent=ventana_padre,
-            tracker_window=ventana_padre # <--- Le pasamos el TrackerWindow
+            parent=None,
+            tracker_window=ventana_padre 
         )
         self._panel_admin.setModal(False)
         
