@@ -422,7 +422,14 @@ class RastreadorAuto(QObject):
             return
 
         cambio_de_app = app != self._app_actual
-        if cambio_de_app:
+        cambio_de_pestana = (
+            not cambio_de_app
+            and app in NAVEGADORES_CONOCIDOS
+            and titulo != self._titulo_actual
+        )
+        cambio_de_segmento = cambio_de_app or cambio_de_pestana
+
+        if cambio_de_segmento:
             if self._id_segmento is not None:
                 self.db.cerrar_segmento_activo(self.usuario_id)
                 seg = self.db.obtener_segmento_por_id(self._id_segmento)
@@ -446,7 +453,7 @@ class RastreadorAuto(QObject):
         if app in NAVEGADORES_CONOCIDOS:
             self._hilo_url.set_app(app)
             
-            if cambio_de_app:
+            if cambio_de_segmento:
                 # Deja que el hilo lector actualice la URL antes del siguiente muestreo.
                 self._esperando_url = True
                 QTimer.singleShot(
