@@ -65,6 +65,17 @@ class ApiClient:
         self.token = None
         self.usuario = None
 
+    def cambiar_mi_password(self, password_actual, password_nueva):
+        """PUT /usuarios/me/password — cambia la contraseña del usuario autenticado."""
+        return self._request(
+            "PUT",
+            "/usuarios/me/password",
+            json={
+                "password_actual": password_actual,
+                "password_nueva": password_nueva,
+            },
+        )
+
     def registrar(self, nombre: str, apellido: str, email: str, password: str):
         """POST /auth/registro — crea una cuenta nueva."""
         body = {

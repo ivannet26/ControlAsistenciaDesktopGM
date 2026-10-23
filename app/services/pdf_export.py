@@ -1,10 +1,12 @@
 import base64
-import traceback
+import logging
 from datetime import datetime
 from pathlib import Path
 
 from jinja2 import Template
 from xhtml2pdf import pisa
+
+logger = logging.getLogger(__name__)
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]  # app/
@@ -19,7 +21,7 @@ def _img_data_uri(nombre_archivo: str) -> str:
     """
     ruta = ASSETS_DIR / nombre_archivo
     if not ruta.exists():
-        print(f"[PDF] ⚠️  No existe: {ruta}")
+        logger.warning("[PDF] No existe el recurso de imagen: %s", ruta)
         return ""
 
     extension = ruta.suffix.lower().lstrip(".")
@@ -35,8 +37,8 @@ def _img_data_uri(nombre_archivo: str) -> str:
         with open(ruta, "rb") as f:
             data = base64.b64encode(f.read()).decode("ascii")
         return f"data:{mime};base64,{data}"
-    except Exception as e:
-        print(f"[PDF] ⚠️  Error leyendo {ruta}: {e}")
+    except Exception:
+        logger.exception("[PDF] Error leyendo recurso de imagen %s", ruta)
         return ""
 
 
@@ -89,7 +91,26 @@ def exportar_informe_pdf(
     grupo: list,
 ) -> bool:
     """Genera el PDF. Retorna True si tuvo éxito, False si falló."""
+    try:
+        return _exportar_informe_pdf(
+            ruta_salida,
+            usuario,
+            fecha_iso,
+            registros,
+            grupo,
+        )
+    except Exception:
+        logger.exception("[PDF] Error preparando o generando %s", ruta_salida)
+        return False
 
+
+def _exportar_informe_pdf(
+    ruta_salida: str,
+    usuario: dict,
+    fecha_iso: str,
+    registros: list,
+    grupo: list,
+) -> bool:
     # --- Datos base ---
     usuario_nombre = (
         f"{usuario.get('nombre', '')} {usuario.get('apellido', '')}".strip()
@@ -156,14 +177,17 @@ def exportar_informe_pdf(
     try:
         with open(ruta_salida, "wb") as f:
             status = pisa.CreatePDF(html, dest=f, encoding="utf-8")
-    except Exception as e:
-        print(f"[PDF] ❌ Excepción al generar: {e}")
-        traceback.print_exc()
+    except Exception:
+        logger.exception("[PDF] Excepción al generar %s", ruta_salida)
         return False
 
     if status.err:
-        print(f"[PDF] ❌ xhtml2pdf reportó {status.err} error(es)")
+        logger.error(
+            "[PDF] xhtml2pdf reportó %s error(es) generando %s",
+            status.err,
+            ruta_salida,
+        )
         return False
 
-    print(f"[PDF] ✅ Generado: {ruta_salida}")
+    logger.info("[PDF] Generado: %s", ruta_salida)
     return True

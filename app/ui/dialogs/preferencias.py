@@ -568,6 +568,7 @@ class DialogoPreferencias(QDialog):
         layout.addSpacing(6)
 
         btn_password = QPushButton("Cambiar contraseña")
+        self.btn_cambiar_password = btn_password
         btn_password.setCursor(Qt.PointingHandCursor)
         btn_password.setFixedHeight(32)
         btn_password.setStyleSheet(f"""
@@ -587,7 +588,9 @@ class DialogoPreferencias(QDialog):
                 background-color: rgba(33, 150, 243, 0.25);
             }}
         """)
-        btn_password.clicked.connect(self._on_cambiar_password)
+        self.btn_cambiar_password.clicked.connect(
+            self._abrir_dialogo_cambiar_password
+        )
         layout.addWidget(btn_password, 0, Qt.AlignLeft)
 
         layout.addSpacing(8)
@@ -595,15 +598,24 @@ class DialogoPreferencias(QDialog):
 
         return self._con_scroll(contenido)
 
-    def _on_cambiar_password(self):
-        """Placeholder — aquí conectarás con tu backend."""
+    def _abrir_dialogo_cambiar_password(self):
+        from app.ui.dialogs.cambiar_password import DialogoCambiarPassword
         from PySide6.QtWidgets import QMessageBox
-        QMessageBox.information(
-            self,
-            "Cambiar contraseña",
-            "Esta función se conectará con el servidor de GM Ingenieros.\n"
-            "Próximamente disponible.",
-        )
+
+        ventana = self.parent()
+        while ventana is not None and not hasattr(ventana, "client"):
+            ventana = ventana.parent() if hasattr(ventana, "parent") else None
+
+        client = getattr(ventana, "client", None)
+        if client is None:
+            QMessageBox.critical(
+                self,
+                "Error",
+                "No se encontró el cliente autenticado.",
+            )
+            return
+
+        DialogoCambiarPassword(client, self).exec()
 
     # ============================================================
     # HANDLERS
