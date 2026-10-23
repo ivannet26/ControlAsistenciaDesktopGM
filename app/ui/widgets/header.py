@@ -1,5 +1,8 @@
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QAction, QFont, QFontMetrics
+import logging
+
+from PySide6.QtCore import Qt, Signal, QSize, QRectF, QUrl
+from PySide6.QtGui import QAction, QFont, QFontMetrics, QPixmap, QPainter, QPainterPath
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QFrame, QLabel, QPushButton, QMenu,
     QSizePolicy, QWidgetAction,
@@ -17,6 +20,7 @@ COLOR_TITULO = "#ffffff"
 COLOR_LINEA = "#2196f3"    # acento discreto
 
 VERSION_APP = "1.0.9"
+logger = logging.getLogger(__name__)
 
 
 class HeaderWidget(QWidget):
@@ -24,10 +28,20 @@ class HeaderWidget(QWidget):
     abrir_preferencias = Signal()
     abrir_rastreador_auto = Signal()
 
-    def __init__(self, nombre_usuario: str, parent=None, email: str = ""):
+    def __init__(
+        self,
+        nombre_usuario: str,
+        parent=None,
+        email: str = "",
+        avatar_url: str | None = None,
+    ):
         super().__init__(parent)
         self.nombre_usuario = nombre_usuario
         self.email_usuario = email or f"{nombre_usuario.lower().replace(' ', '.')}@gmail.com"
+        self.avatar_url = avatar_url
+        self._avatar_pixmap = None
+        self._menu_avatar_label = None
+        self._avatar_network = QNetworkAccessManager(self)
 
         self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self.setFixedHeight(52)
@@ -108,14 +122,14 @@ class HeaderWidget(QWidget):
 
         # Avatar con la inicial
         inicial = (nombre_usuario.strip()[:1] or "?").upper()
-        avatar = QLabel(inicial)
-        avatar.setFixedSize(22, 22)
-        avatar.setAlignment(Qt.AlignCenter)
-        avatar.setStyleSheet(f"""
+        self.avatar = QLabel(inicial)
+        self.avatar.setFixedSize(22, 22)
+        self.avatar.setAlignment(Qt.AlignCenter)
+        self.avatar.setStyleSheet(f"""
             background: {COLOR_LINEA};
             color: #ffffff;
             border: none;
-            border-radius: 4px;
+            border-radius: 11px;
             font-size: 11px;
             font-weight: 700;
             padding: 0; margin: 0;
@@ -137,7 +151,7 @@ class HeaderWidget(QWidget):
             "font-size: 10px; padding: 0; margin: 0;"
         )
 
-        for w in (avatar, label_nombre, flecha):
+        for w in (self.avatar, label_nombre, flecha):
             w.setAttribute(Qt.WA_TransparentForMouseEvents)
             lay_u.addWidget(w, alignment=Qt.AlignVCenter)
 
@@ -147,6 +161,57 @@ class HeaderWidget(QWidget):
 
         self.btn_usuario.clicked.connect(self._abrir_menu)
         layout.addWidget(self.btn_usuario, alignment=Qt.AlignVCenter)
+        if avatar_url:
+            self._descargar_avatar(avatar_url)
+
+    def _descargar_avatar(self, avatar_url: str):
+        reply = self._avatar_network.get(QNetworkRequest(QUrl(avatar_url)))
+        reply.finished.connect(lambda reply=reply: self._on_avatar_descargado(reply))
+
+    def _on_avatar_descargado(self, reply: QNetworkReply):
+        try:
+            if reply.error() != QNetworkReply.NoError:
+                logger.warning("No se pudo descargar el avatar: %s", reply.errorString())
+                return
+
+            pixmap = QPixmap()
+            if not pixmap.loadFromData(bytes(reply.readAll())):
+                logger.warning("La respuesta del avatar no contiene una imagen válida")
+                return
+
+            self._avatar_pixmap = pixmap
+            self._aplicar_avatar(self.avatar, 22)
+            if self._menu_avatar_label is not None:
+                self._aplicar_avatar(self._menu_avatar_label, 40)
+        finally:
+            reply.deleteLater()
+
+    def _aplicar_avatar(self, label: QLabel, size: int):
+        source = self._avatar_pixmap
+        if source is None:
+            return
+
+        scaled = source.scaled(
+            QSize(size, size),
+            Qt.KeepAspectRatioByExpanding,
+            Qt.SmoothTransformation,
+        )
+        left = (scaled.width() - size) // 2
+        top = (scaled.height() - size) // 2
+        cropped = scaled.copy(left, top, size, size)
+        circular = QPixmap(size, size)
+        circular.fill(Qt.transparent)
+
+        painter = QPainter(circular)
+        painter.setRenderHint(QPainter.Antialiasing)
+        path = QPainterPath()
+        path.addEllipse(QRectF(0, 0, size, size))
+        painter.setClipPath(path)
+        painter.drawPixmap(0, 0, cropped)
+        painter.end()
+
+        label.setText("")
+        label.setPixmap(circular)
 
     # ============================================================
     # ABRIR MENÚ
@@ -188,6 +253,7 @@ class HeaderWidget(QWidget):
         wa_header = QWidgetAction(menu)
         wa_header.setDefaultWidget(header_widget)
         menu.addAction(wa_header)
+        menu.aboutToHide.connect(self._limpiar_avatar_menu)
         menu.addSeparator()
 
         # ---- Workspace ----
@@ -271,6 +337,9 @@ class HeaderWidget(QWidget):
         pos.setY(pos.y() + 6)
         menu.exec(pos)
 
+    def _limpiar_avatar_menu(self):
+        self._menu_avatar_label = None
+
     # ============================================================
     # HEADER DEL MENÚ (avatar grande + nombre + email)
     # ============================================================
@@ -298,6 +367,8 @@ class HeaderWidget(QWidget):
                 font-weight: 700;
             }}
         """)
+        self._menu_avatar_label = avatar
+        self._aplicar_avatar(avatar, 40)
         layout.addWidget(avatar)
 
         # Nombre + email

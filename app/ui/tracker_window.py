@@ -179,7 +179,12 @@ class TrackerWindow(QWidget):
         contenido_layout.setContentsMargins(14, 14, 14, 14)
         contenido_layout.setSpacing(10)
 
-        self.header = HeaderWidget(self.usuario.get("nombre", ""))
+        self.header = HeaderWidget(
+            self.usuario.get("nombre", ""),
+            avatar_url=self.client.construir_url_avatar(
+                self.usuario.get("avatar_url")
+            ),
+        )
         self.header.cerrar_sesion.connect(self._on_cerrar_sesion)
         contenido_layout.addWidget(self.header)
         contenido_layout.addWidget(self._separador())

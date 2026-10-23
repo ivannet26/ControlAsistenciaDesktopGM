@@ -76,6 +76,13 @@ class ApiClient:
             },
         )
 
+    def construir_url_avatar(self, avatar_url):
+        if not avatar_url:
+            return None
+        if avatar_url.startswith("http"):
+            return avatar_url
+        return f"{self.base_url}{avatar_url}"
+
     def registrar(self, nombre: str, apellido: str, email: str, password: str):
         """POST /auth/registro — crea una cuenta nueva."""
         body = {
