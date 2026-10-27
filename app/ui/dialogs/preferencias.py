@@ -407,7 +407,9 @@ class DialogoPreferencias(QDialog):
         # ---- SpinBox: segundos mínimos ----
         segundos = QSpinBox()
         segundos.setRange(1, 3600)
-        segundos.setValue(PS.get_int(PS.KEY_RASTREADOR_SEGUNDOS_MIN, 15))
+        PS.set_int(PS.KEY_RASTREADOR_SEGUNDOS_MIN, 1)
+        segundos.setValue(1)
+        segundos.setEnabled(False)
         segundos.setSuffix(" seg")
         segundos.setFixedHeight(30)
         segundos.setFixedWidth(65)
@@ -426,6 +428,11 @@ class DialogoPreferencias(QDialog):
             QSpinBox:focus {{
                 border: 1px solid {COLOR_ACENTO};
             }}
+            QSpinBox:disabled {{
+                background-color: {COLOR_PANEL};
+                border: 1px solid {COLOR_BORDE};
+                color: {COLOR_TEXTO_TERCIARIO};
+            }}
             QSpinBox::up-button,
             QSpinBox::down-button {{
                 width: 0px;
@@ -442,12 +449,6 @@ class DialogoPreferencias(QDialog):
                 image: none;
             }}
         """)
-        segundos.valueChanged.connect(
-            lambda v: PS.set_int(PS.KEY_RASTREADOR_SEGUNDOS_MIN, v)
-        )
-        segundos.valueChanged.connect(
-            lambda v: PS.set_int(PS.KEY_RASTREADOR_SEGUNDOS_MIN, v)
-        )
 
         layout.addWidget(FilaAjuste(
             "Solo rastrear las aplicaciones que estén activas por más de",

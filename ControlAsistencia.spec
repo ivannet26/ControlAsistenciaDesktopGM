@@ -30,6 +30,7 @@ a = Analysis(
         'win32api',
         'win32con',
         'win32process',
+        'win32crypt',
         'psutil',
         'requests',
         'reportlab',

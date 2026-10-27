@@ -66,6 +66,7 @@ MENSAJES_ENERGIA = {
 
 class TrackerWindow(QWidget):
     cerrar_sesion = Signal()
+    token_invalido = Signal()
 
     def __init__(self, client: ApiClient, usuario: dict):
         super().__init__()
@@ -83,6 +84,7 @@ class TrackerWindow(QWidget):
         self._cerrando_real = False
         self._forzar_detencion = False
         self._motivo_energia = ""
+        self._token_invalido_reportado = False
 
         # Cache
         self._proyectos = []
@@ -408,6 +410,12 @@ class TrackerWindow(QWidget):
     def _on_error_worker(self, mensaje: str):
         print(f"[API] ❌ Error del worker: {mensaje}")
         self._ocupado = False
+        mensaje_token = mensaje.casefold().replace("í", "i")
+        if "token invalido" in mensaje_token or "token expirado" in mensaje_token:
+            if not self._token_invalido_reportado:
+                self._token_invalido_reportado = True
+                self.token_invalido.emit()
+            return
         if self.registro_activo and not self.reloj.isActive():
             self.reloj.start(1000)
         self._mostrar_mensaje(mensaje, "error")

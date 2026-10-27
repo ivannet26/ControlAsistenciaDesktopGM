@@ -81,10 +81,11 @@ class RegistroWorker(QThread):
 class LoginWindow(QWidget):
     login_exitoso = Signal(dict)
     auto_login_fallido = Signal()          
+    cerrado = Signal()
     MAX_INTENTOS_AUTO = 5                  
     ESPERA_REINTENTO_MS = 10_000     
 
-    def __init__(self, client: ApiClient):
+    def __init__(self, client: ApiClient, email: str | None = None):
         super().__init__()
         self.client = client
         self.worker = None
@@ -100,6 +101,9 @@ class LoginWindow(QWidget):
 
         self._armar_ui()
         self._cargar_credenciales_guardadas()
+        if email is not None:
+            self.email_input.setText(email)
+            self.password_input.clear()
 
         QTimer.singleShot(0, self._ajustar_tamano)
 
@@ -564,3 +568,7 @@ class LoginWindow(QWidget):
         self.boton_login.setEnabled(True)
         self.boton_login.setText("Ingresar")
         self.auto_login_fallido.emit()
+
+    def closeEvent(self, event):
+        self.cerrado.emit()
+        super().closeEvent(event)

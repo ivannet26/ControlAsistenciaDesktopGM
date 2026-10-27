@@ -3,15 +3,21 @@ import sys
 import os
 import signal
 import atexit
+import logging
 
-from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
+from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QMessageBox
 from PySide6.QtGui import QIcon, QCursor
 from PySide6.QtCore import Qt, QTimer
 
 from app.services.api_client import ApiClient
+from app.services import cuentas_store
 from app.ui.login_window import LoginWindow
+from app.ui.selector_cuentas import SelectorCuentas
 from app.ui.tracker_window import TrackerWindow
 from app.utils import preferencias_store as PS
+from app.utils.workers import ApiWorker
+
+logger = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------------
@@ -74,7 +80,11 @@ def main():
 
     estado = {
         "login": None,
+        "selector": None,
         "tracker": None,
+        "cuenta_actual_email": None,
+        "validacion_cuenta_en_curso": False,
+        "worker_validacion_cuenta": None,
         # arrancó Windows y el usuario pidió no ver la app
         "silencioso": lanzado_por_windows and not mostrar_al_iniciar,
         # True mientras se cambia de ventana (evita salir sin querer)
@@ -85,7 +95,9 @@ def main():
     # Bandeja del sistema
     # ------------------------------------------------------------
     def mostrar_app():
-        traer_al_frente(estado["tracker"] or estado["login"])
+        traer_al_frente(
+            estado["tracker"] or estado["login"] or estado["selector"]
+        )
 
     def salir_de_verdad():
         if estado["tracker"]:
@@ -112,22 +124,173 @@ def main():
 
     # Si el usuario cierra el login con la X (sin tracker abierto), salir
     def al_cerrar_ultima_ventana():
-        if estado["tracker"] is None and not estado["transicion"]:
+        if (
+            estado["tracker"] is None
+            and estado["login"] is None
+            and estado["selector"] is None
+            and not estado["transicion"]
+        ):
             QApplication.quit()
 
     app.lastWindowClosed.connect(al_cerrar_ultima_ventana)
 
     # ------------------------------------------------------------
+    def mostrar_selector():
+        try:
+            cuentas = cuentas_store.listar_cuentas()
+        except Exception as exc:
+            logger.exception("No se pudieron cargar las cuentas guardadas")
+            QMessageBox.critical(
+                None,
+                "Error al cargar cuentas",
+                f"No se pudieron leer las cuentas guardadas:\n{exc}",
+            )
+            cuentas = []
+
+        if not cuentas:
+            abrir_login()
+            return
+
+        selector = SelectorCuentas(cuentas, client)
+        selector.cuenta_seleccionada.connect(abrir_cuenta)
+        selector.agregar_cuenta.connect(abrir_login)
+        selector.cerrado.connect(
+            lambda selector=selector: al_cerrar_selector(selector)
+        )
+        estado["selector"] = selector
+        centrar_en_pantalla(selector)
+        selector.show()
+        selector.raise_()
+        selector.activateWindow()
+
+    def al_cerrar_selector(selector):
+        if estado["selector"] is selector:
+            estado["selector"] = None
+
+    def abrir_login(email: str | None = None):
+        if estado["selector"] is not None:
+            estado["selector"].hide()
+
+        login = LoginWindow(client, email=email)
+        estado["login"] = login
+        login.login_exitoso.connect(abrir_tracker)
+        login.cerrado.connect(lambda login=login: al_cerrar_login(login))
+        centrar_en_pantalla(login)
+        login.show()
+        login.raise_()
+        login.activateWindow()
+
+    def volver_al_login_por_token(tracker):
+        if estado["tracker"] is not tracker:
+            return
+
+        email = (
+            estado["cuenta_actual_email"]
+            or tracker.usuario.get("email")
+            or tracker.usuario.get("correo")
+            or ""
+        )
+        estado["transicion"] = True
+        try:
+            estado["tracker"] = None
+            tracker._cerrando_real = True
+            tracker.close()
+            client.logout()
+            abrir_login(email=email)
+        finally:
+            estado["transicion"] = False
+
+    def al_cerrar_login(login):
+        if estado["login"] is not login:
+            return
+        estado["login"] = None
+        if estado["selector"] is not None and estado["tracker"] is None:
+            estado["transicion"] = False
+            estado["selector"].show()
+            traer_al_frente(estado["selector"])
+
+    def abrir_cuenta(cuenta: dict):
+        if estado["validacion_cuenta_en_curso"]:
+            return
+
+        usuario = dict(cuenta.get("usuario") or {})
+        usuario.update({
+            clave: cuenta[clave]
+            for clave in ("id", "nombre", "apellido", "email", "correo", "rol", "avatar_url")
+            if clave in cuenta
+        })
+        client.token = cuenta["token"]
+        client.usuario = usuario
+        estado["cuenta_actual_email"] = cuenta.get("email")
+
+        estado["validacion_cuenta_en_curso"] = True
+        worker = ApiWorker(client.obtener_temporizador_activo)
+        estado["worker_validacion_cuenta"] = worker
+        worker.exito.connect(
+            lambda _resultado, usuario=usuario: _cuenta_validada(usuario)
+        )
+        worker.error.connect(
+            lambda mensaje, cuenta=cuenta: _error_validando_cuenta(
+                cuenta, mensaje
+            )
+        )
+        worker.start()
+
+    def _cuenta_validada(usuario: dict):
+        estado["validacion_cuenta_en_curso"] = False
+        estado["worker_validacion_cuenta"] = None
+        abrir_tracker(usuario)
+
+    def _error_validando_cuenta(cuenta: dict, _mensaje: str):
+        estado["validacion_cuenta_en_curso"] = False
+        estado["worker_validacion_cuenta"] = None
+        estado["transicion"] = True
+        try:
+            selector = estado["selector"]
+            if selector is not None:
+                estado["selector"] = None
+                selector.close()
+
+            client.logout()
+            abrir_login(email=cuenta.get("email") or "")
+        finally:
+            estado["transicion"] = False
+
     def abrir_tracker(usuario: dict):
         estado["transicion"] = True
         try:
+            usuario = dict(usuario or {})
+            login_activo = estado["login"]
+            if not usuario.get("email") and login_activo is not None:
+                usuario["email"] = login_activo.email_input.text().strip()
+
+            if client.token:
+                try:
+                    cuentas_store.guardar_cuenta(usuario, client.token)
+                except Exception as exc:
+                    logger.exception("No se pudo guardar la cuenta")
+                    QMessageBox.warning(
+                        None,
+                        "Cuenta no guardada",
+                        f"Se inició sesión, pero no se pudo guardar la cuenta:\n{exc}",
+                    )
+            estado["cuenta_actual_email"] = usuario.get("email")
+
             if estado["login"]:
                 login = estado["login"]
                 estado["login"] = None
                 login.close()
 
+            if estado["selector"] is not None:
+                selector = estado["selector"]
+                estado["selector"] = None
+                selector.close()
+
             tracker = TrackerWindow(client, usuario)
             tracker.cerrar_sesion.connect(volver_al_login)
+            tracker.token_invalido.connect(
+                lambda tracker=tracker: volver_al_login_por_token(tracker)
+            )
             estado["tracker"] = tracker
 
             # --- Recordatorios: enlazar con la bandeja ---
@@ -180,6 +343,7 @@ def main():
                 tracker.close()
 
             client.logout()
+            estado["cuenta_actual_email"] = None
 
             # Al cerrar sesión: olvidar contraseña y desactivar el auto-login
             try:
@@ -191,60 +355,67 @@ def main():
                     email=email or "", password="", recordar=False
                 )
             except Exception as e:
-                print(f"[Logout] No se pudo limpiar credenciales: {e}")
+                logger.exception("No se pudieron limpiar las credenciales")
 
-            login = LoginWindow(client)
-            login.login_exitoso.connect(abrir_tracker)
-            estado["login"] = login
-
-            centrar_en_pantalla(login)
-            login.show()
-            login.raise_()
-            login.activateWindow()
+            mostrar_selector()
         finally:
             estado["transicion"] = False
 
     # ------------------------------------------------------------
     # Arranque
     # ------------------------------------------------------------
-    login_inicial = LoginWindow(client)
-    login_inicial.login_exitoso.connect(abrir_tracker)
-    estado["login"] = login_inicial
+    try:
+        cuentas_guardadas = cuentas_store.listar_cuentas()
+    except Exception as exc:
+        logger.exception("No se pudieron cargar las cuentas guardadas")
+        QMessageBox.critical(
+            None,
+            "Error al cargar cuentas",
+            f"No se pudieron leer las cuentas guardadas:\n{exc}",
+        )
+        cuentas_guardadas = []
 
-    def mostrar_ventana_login():
-        estado["silencioso"] = False
-        centrar_en_pantalla(login_inicial)
-        login_inicial.show()
-        login_inicial.raise_()
-        login_inicial.activateWindow()
+    if cuentas_guardadas:
+        if estado["silencioso"]:
+            abrir_cuenta(cuentas_guardadas[-1])
+        else:
+            mostrar_selector()
+    else:
+        login_inicial = LoginWindow(client)
+        estado["login"] = login_inicial
+        login_inicial.login_exitoso.connect(abrir_tracker)
 
-    # Si el auto-login falla, hay que mostrar el formulario sí o sí
-    login_inicial.auto_login_fallido.connect(mostrar_ventana_login)
-
-    def mostrar_login_inicial():
-        try:
-            visible = mostrar_al_iniciar or not lanzado_por_windows
-
-            # Mostrar el login (con "Ingresando...") salvo en arranque silencioso
-            if visible:
-                mostrar_ventana_login()
-
-            hay_credenciales = login_inicial.auto_login_si_hay_credenciales()
-
-            # Sin credenciales y arranque silencioso: dejar el login minimizado
-            if not hay_credenciales and not visible:
-                login_inicial.showMinimized()
-        except Exception as e:
-            print(f"[Login inicial] Error: {e}")
+        def mostrar_ventana_login():
+            estado["silencioso"] = False
+            centrar_en_pantalla(login_inicial)
             login_inicial.show()
+            login_inicial.raise_()
+            login_inicial.activateWindow()
 
-    QTimer.singleShot(150, mostrar_login_inicial)
+        login_inicial.cerrado.connect(
+            lambda: al_cerrar_login(login_inicial)
+        )
+        login_inicial.auto_login_fallido.connect(mostrar_ventana_login)
+
+        def mostrar_login_inicial():
+            try:
+                visible = mostrar_al_iniciar or not lanzado_por_windows
+                if visible:
+                    mostrar_ventana_login()
+                hay_credenciales = login_inicial.auto_login_si_hay_credenciales()
+                if not hay_credenciales and not visible:
+                    login_inicial.showMinimized()
+            except Exception:
+                logger.exception("[Login inicial] Error")
+                login_inicial.show()
+
+        QTimer.singleShot(150, mostrar_login_inicial)
 
     # ------------------------------------------------------------
     # Ctrl+C handler
     # ------------------------------------------------------------
     def manejador_sigint(sig, frame):
-        print("\n[App] Cerrando limpiamente...")
+        logger.info("Cerrando la aplicación")
         detener_todos_los_threads()
         QApplication.quit()
 

@@ -68,6 +68,8 @@ def set_str(key: str, valor: str):
 
 #  Helpers de enteros
 def get_int(key: str, default: int = 0) -> int:
+    if key == KEY_RASTREADOR_SEGUNDOS_MIN:
+        return 1
     try:
         valor = _settings().value(key, default)
         return int(valor)
@@ -76,6 +78,8 @@ def get_int(key: str, default: int = 0) -> int:
 
 
 def set_int(key: str, valor: int):
+    if key == KEY_RASTREADOR_SEGUNDOS_MIN:
+        valor = 1
     try:
         _settings().setValue(key, int(valor))
     except (ValueError, TypeError):
