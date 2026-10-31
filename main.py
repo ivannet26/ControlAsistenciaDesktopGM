@@ -9,7 +9,12 @@ from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QMessageBox
 from PySide6.QtGui import QIcon, QCursor
 from PySide6.QtCore import Qt, QTimer
 
-from app.services.api_client import ApiClient
+from app.services.api_client import (
+    ApiClient,
+    ApiError,
+    NetworkError,
+    SessionExpired,
+)
 from app.services import cuentas_store
 from app.ui.login_window import LoginWindow
 from app.ui.selector_cuentas import SelectorCuentas
@@ -209,6 +214,43 @@ def main():
             estado["selector"].show()
             traer_al_frente(estado["selector"])
 
+    def _preparar_cuenta():
+        try:
+            if client.refresh_token:
+                client.refresh(forzar=True)
+            return ("ok", client.obtener_temporizador_activo())
+        except SessionExpired as exc:
+            return ("sesion", str(exc))
+        except NetworkError as exc:
+            return ("red", str(exc))
+        except ApiError as exc:
+            if exc.status_code in (401, 403):
+                return ("sesion", str(exc))
+            return ("error", str(exc))
+        except Exception as exc:
+            return ("error", str(exc))
+
+    def _resultado_validacion_cuenta(cuenta: dict, usuario: dict, resultado):
+        tipo, valor = resultado
+        estado["validacion_cuenta_en_curso"] = False
+        estado["worker_validacion_cuenta"] = None
+
+        if tipo == "ok":
+            _cuenta_validada(usuario)
+            return
+        if tipo == "sesion":
+            _error_validando_cuenta(cuenta, valor)
+            return
+        if tipo == "red":
+            QMessageBox.warning(
+                None,
+                "Sin conexión",
+                "No se pudo conectar con el servidor. "
+                "Revisa tu conexión e inténtalo de nuevo.",
+            )
+            return
+        QMessageBox.warning(None, "Error", valor)
+
     def abrir_cuenta(cuenta: dict):
         if estado["validacion_cuenta_en_curso"]:
             return
@@ -219,20 +261,22 @@ def main():
             for clave in ("id", "nombre", "apellido", "email", "correo", "rol", "avatar_url")
             if clave in cuenta
         })
-        client.token = cuenta["token"]
+        client.cargar_tokens(cuenta["token"], cuenta.get("refresh_token"))
         client.usuario = usuario
         estado["cuenta_actual_email"] = cuenta.get("email")
 
         estado["validacion_cuenta_en_curso"] = True
-        worker = ApiWorker(client.obtener_temporizador_activo)
+        worker = ApiWorker(_preparar_cuenta)
         estado["worker_validacion_cuenta"] = worker
         worker.exito.connect(
-            lambda _resultado, usuario=usuario: _cuenta_validada(usuario)
+            lambda resultado, cuenta=cuenta, usuario=usuario:
+                _resultado_validacion_cuenta(cuenta, usuario, resultado)
         )
         worker.error.connect(
-            lambda mensaje, cuenta=cuenta: _error_validando_cuenta(
-                cuenta, mensaje
-            )
+            lambda mensaje, cuenta=cuenta, usuario=usuario:
+                _resultado_validacion_cuenta(
+                    cuenta, usuario, ("error", mensaje)
+                )
         )
         worker.start()
 
@@ -266,7 +310,9 @@ def main():
 
             if client.token:
                 try:
-                    cuentas_store.guardar_cuenta(usuario, client.token)
+                    cuentas_store.guardar_cuenta(
+                        usuario, client.token, client.refresh_token
+                    )
                 except Exception as exc:
                     logger.exception("No se pudo guardar la cuenta")
                     QMessageBox.warning(

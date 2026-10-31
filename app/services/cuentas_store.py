@@ -144,6 +144,30 @@ def guardar_cuenta(
     _guardar_archivo(cuentas)
 
 
+def actualizar_tokens(
+    email: str,
+    token: str,
+    refresh_token: str | None = None,
+) -> None:
+    """Actualiza access+refresh de una cuenta sin reescribir su perfil."""
+    email = (email or "").strip()
+    if not email:
+        raise ValueError("No se puede actualizar una cuenta sin correo electrónico.")
+    if not token:
+        raise ValueError("No se puede actualizar una cuenta sin token de acceso.")
+
+    cuentas = _leer_cuentas()
+    for cuenta in cuentas:
+        if (cuenta.get("email") or "").casefold() == email.casefold():
+            cuenta["token"] = _proteger_token(token)
+            if refresh_token:
+                cuenta["refresh_token"] = _proteger_token(refresh_token)
+            _guardar_archivo(cuentas)
+            return
+
+    raise ValueError(f"No existe una cuenta guardada para {email}")
+
+
 def eliminar_cuenta(email: str) -> None:
     email_normalizado = (email or "").casefold()
     cuentas = [
