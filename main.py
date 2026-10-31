@@ -65,6 +65,27 @@ def traer_al_frente(ventana):
     QApplication.alert(ventana, 0)  # parpadea en la barra si Windows no da foco
 
 
+_AVISOS_ABIERTOS = []
+
+
+def _aviso_no_bloqueante(titulo, mensaje):
+    caja = QMessageBox(
+        QMessageBox.Warning,
+        titulo,
+        mensaje,
+        QMessageBox.Ok,
+    )
+    caja.setWindowModality(Qt.NonModal)
+    caja.setAttribute(Qt.WA_DeleteOnClose)
+    _AVISOS_ABIERTOS.append(caja)
+    caja.finished.connect(
+        lambda _=None: _AVISOS_ABIERTOS.remove(caja)
+        if caja in _AVISOS_ABIERTOS
+        else None
+    )
+    caja.show()
+
+
 def main():
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon(resource_path("app/assets/favicon.png")))
@@ -185,26 +206,6 @@ def main():
         login.raise_()
         login.activateWindow()
 
-    def volver_al_login_por_token(tracker):
-        if estado["tracker"] is not tracker:
-            return
-
-        email = (
-            estado["cuenta_actual_email"]
-            or tracker.usuario.get("email")
-            or tracker.usuario.get("correo")
-            or ""
-        )
-        estado["transicion"] = True
-        try:
-            estado["tracker"] = None
-            tracker._cerrando_real = True
-            tracker.close()
-            client.logout()
-            abrir_login(email=email)
-        finally:
-            estado["transicion"] = False
-
     def al_cerrar_login(login):
         if estado["login"] is not login:
             return
@@ -242,14 +243,13 @@ def main():
             _error_validando_cuenta(cuenta, valor)
             return
         if tipo == "red":
-            QMessageBox.warning(
-                None,
+            _aviso_no_bloqueante(
                 "Sin conexión",
                 "No se pudo conectar con el servidor. "
                 "Revisa tu conexión e inténtalo de nuevo.",
             )
             return
-        QMessageBox.warning(None, "Error", valor)
+        _aviso_no_bloqueante("Error", valor)
 
     def abrir_cuenta(cuenta: dict):
         if estado["validacion_cuenta_en_curso"]:
@@ -334,9 +334,6 @@ def main():
 
             tracker = TrackerWindow(client, usuario)
             tracker.cerrar_sesion.connect(volver_al_login)
-            tracker.token_invalido.connect(
-                lambda tracker=tracker: volver_al_login_por_token(tracker)
-            )
             estado["tracker"] = tracker
 
             # --- Recordatorios: enlazar con la bandeja ---

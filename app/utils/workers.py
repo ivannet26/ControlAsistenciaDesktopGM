@@ -44,6 +44,7 @@ def formatear_duracion(segundos: int) -> str:
 class ApiWorker(QThread):
     exito = Signal(object)
     error = Signal(str)
+    error_detalle = Signal(object)
 
     def __init__(self, funcion, *args, **kwargs):
         super().__init__()
@@ -58,3 +59,4 @@ class ApiWorker(QThread):
             self.exito.emit(resultado)
         except Exception as e:
             self.error.emit(str(e))
+            self.error_detalle.emit(e)

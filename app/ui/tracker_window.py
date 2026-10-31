@@ -1,14 +1,21 @@
 from datetime import date, datetime, timedelta
+import time
+
 import requests
 
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
-    QDialog, QSizePolicy,
+    QDialog, QSizePolicy, QInputDialog, QLineEdit,
 )
 from app.styles.colors import RADIO_CHIP
 from app.services.monitor_energia import MonitorEnergia
-from app.services.api_client import ApiClient
+from app.services import cuentas_store
+from app.services.api_client import (
+    ApiClient,
+    NetworkError,
+    SessionExpired,
+)
 from app.services.inactividad import MonitorInactividad
 from app.services.recordatorios import ServicioRecordatorios, leer_int
 from app.services.rastreador import (
@@ -40,9 +47,6 @@ MAX_CHARS_CHIP = 24
 # Heartbeat: consulta al servidor cada 5 s (detecta timers de la web)
 INTERVALO_HEARTBEAT_MS = 5000
 
-# Ping de vida: avisa al servidor cada 60 s que el timer sigue activo
-INTERVALO_PING_MS = 60_000
-
 # Intervalo de muestreo del rastreador automático (segundos)
 INTERVALO_RASTREADOR_SEG = 1
 
@@ -66,7 +70,6 @@ MENSAJES_ENERGIA = {
 
 class TrackerWindow(QWidget):
     cerrar_sesion = Signal()
-    token_invalido = Signal()
 
     def __init__(self, client: ApiClient, usuario: dict):
         super().__init__()
@@ -84,7 +87,8 @@ class TrackerWindow(QWidget):
         self._cerrando_real = False
         self._forzar_detencion = False
         self._motivo_energia = ""
-        self._token_invalido_reportado = False
+        self._reauth_en_curso = False
+        self._reauth_cancelada = False
 
         # Cache
         self._proyectos = []
@@ -117,9 +121,10 @@ class TrackerWindow(QWidget):
         self.heartbeat.timeout.connect(self._heartbeat)
         self.heartbeat.start(INTERVALO_HEARTBEAT_MS)
 
-        self.ping_timer = QTimer(self)
-        self.ping_timer.timeout.connect(self._ping)
-        self.ping_timer.start(INTERVALO_PING_MS)
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.timeout.connect(self._refrescar_token_silencioso)
+        self._programar_refresco()
 
         self.recordatorios = ServicioRecordatorios(
             lambda: self.registro_activo is not None,
@@ -403,22 +408,26 @@ class TrackerWindow(QWidget):
         self._limpiar_workers()
         worker = ApiWorker(funcion, *args, **kwargs)
         worker.exito.connect(on_exito)
-        worker.error.connect(self._on_error_worker)
+        worker.error_detalle.connect(self._on_error_worker)
         self._workers.append(worker)
         worker.start()
 
-    def _on_error_worker(self, mensaje: str):
-        print(f"[API] ❌ Error del worker: {mensaje}")
+    def _on_error_worker(self, error):
+        print(f"[API] ❌ Error del worker: {error}")
         self._ocupado = False
-        mensaje_token = mensaje.casefold().replace("í", "i")
-        if "token invalido" in mensaje_token or "token expirado" in mensaje_token:
-            if not self._token_invalido_reportado:
-                self._token_invalido_reportado = True
-                self.token_invalido.emit()
-            return
         if self.registro_activo and not self.reloj.isActive():
             self.reloj.start(1000)
-        self._mostrar_mensaje(mensaje, "error")
+
+        if isinstance(error, SessionExpired):
+            self._solicitar_reauth(str(error), forzar=True)
+            return
+        if isinstance(error, NetworkError):
+            self._mostrar_mensaje(f"Sin conexión: {error}", "error")
+            return
+        if getattr(error, "status_code", None) == 401:
+            self._solicitar_reauth(str(error), forzar=True)
+            return
+        self._mostrar_mensaje(str(error), "error")
 
     # ================= CACHE =================
     def _precargar_proyectos(self):
@@ -628,12 +637,14 @@ class TrackerWindow(QWidget):
         self._limpiar_workers()
         worker = ApiWorker(self.client.obtener_temporizador_activo)
         worker.exito.connect(self._on_heartbeat)
-        worker.error.connect(self._on_heartbeat_error)
+        worker.error_detalle.connect(self._on_heartbeat_error)
         self._workers.append(worker)
         worker.start()
 
-    def _on_heartbeat_error(self, _mensaje):
+    def _on_heartbeat_error(self, error):
         self._hb_en_curso = False
+        if isinstance(error, SessionExpired):
+            self._solicitar_reauth(str(error), forzar=False)
 
     def _on_heartbeat(self, registro):
         self._hb_en_curso = False
@@ -649,6 +660,7 @@ class TrackerWindow(QWidget):
         elif not registro and self.registro_activo:
             self._on_detenido(None)
             self._mostrar_mensaje("Temporizador detenido desde la web.", "success")
+        self._programar_refresco()
 
     def _traer_al_frente(self):
         self.setWindowState(self.windowState() & ~Qt.WindowMinimized)
@@ -657,22 +669,142 @@ class TrackerWindow(QWidget):
         self.activateWindow()
         QApplication.alert(self, 0)
 
-    # ================= PING DE VIDA =================
-    def _ping(self):
-        if not self.registro_activo or self._cerrando_real:
+    # ================= RENOVACIÓN / REAUTENTICACIÓN =================
+    def _programar_refresco(self):
+        expira = getattr(self.client, "token_expira_en", None)
+        if not expira or not getattr(self.client, "refresh_token", None):
+            self._refresh_timer.stop()
             return
-        if self._sin_conexion():
+        margen = self.client._margen_renovacion()
+        restante = expira - time.time() - margen
+        if restante <= 0:
+            self._refresh_timer.start(1000)
+        else:
+            self._refresh_timer.start(max(1000, int(restante * 1000)))
+
+    def _refrescar_token_silencioso(self):
+        if self._cerrando_real or not getattr(self.client, "refresh_token", None):
             return
-        if not hasattr(self.client, "ping_temporizador"):
-            return
-        self._limpiar_workers()
-        worker = ApiWorker(
-            self.client.ping_temporizador, self.registro_activo.get("id")
-        )
-        worker.exito.connect(lambda _: None)
-        worker.error.connect(lambda _: None)
+        worker = ApiWorker(self.client.refresh)
+        worker.exito.connect(self._on_refresh_ok)
+        worker.error_detalle.connect(self._on_refresh_error)
         self._workers.append(worker)
         worker.start()
+
+    def _on_refresh_ok(self, _resultado):
+        if not self._cerrando_real:
+            self._programar_refresco()
+
+    def _on_refresh_error(self, error):
+        if self._cerrando_real:
+            return
+        if isinstance(error, SessionExpired):
+            self._solicitar_reauth(str(error), forzar=False)
+            return
+        if isinstance(error, NetworkError):
+            self._refresh_timer.start(60_000)
+            return
+        self._mostrar_mensaje(f"No se pudo renovar la sesión: {error}", "error")
+        self._refresh_timer.start(60_000)
+
+    def _solicitar_reauth(self, motivo: str = "", forzar: bool = False):
+        if self._cerrando_real or self._reauth_en_curso:
+            return
+        if self._reauth_cancelada and not forzar:
+            return
+
+        self._reauth_en_curso = True
+        print(f"[Auth] Reautenticación solicitada: {motivo}")
+        if self.registro_activo and not self.reloj.isActive():
+            self.reloj.start(1000)
+
+        email = ""
+        if isinstance(self.client.usuario, dict):
+            email = (
+                self.client.usuario.get("email")
+                or self.client.usuario.get("correo")
+                or ""
+            )
+        email = (
+            email
+            or self.usuario.get("email")
+            or self.usuario.get("correo")
+            or ""
+        )
+        if not email:
+            self._reauth_en_curso = False
+            self._mostrar_mensaje(
+                "Sesión expirada y no se pudo determinar el correo.",
+                "error",
+            )
+            return
+
+        password, aceptar = QInputDialog.getText(
+            self,
+            "Sesión expirada",
+            f"Tu sesión expiró. Ingresa la contraseña de {email}:",
+            QLineEdit.Password,
+        )
+        if not aceptar or not password:
+            self._reauth_en_curso = False
+            self._reauth_cancelada = True
+            self._mostrar_mensaje(
+                "Sesión expirada. Vuelve a iniciar sesión para continuar.",
+                "error",
+            )
+            return
+
+        worker = ApiWorker(self.client.login, email, password)
+        worker.exito.connect(self._on_reauth_ok)
+        worker.error_detalle.connect(self._on_reauth_error)
+        self._workers.append(worker)
+        worker.start()
+
+    def _on_reauth_ok(self, usuario):
+        if self._cerrando_real:
+            return
+        self._reauth_en_curso = False
+        self._reauth_cancelada = False
+        guardado = True
+        try:
+            cuentas_store.guardar_cuenta(
+                usuario, self.client.token, self.client.refresh_token
+            )
+        except Exception as exc:
+            guardado = False
+            self._mostrar_mensaje(
+                f"No se pudieron guardar los tokens: {exc}", "error"
+            )
+
+        self.usuario = usuario
+        self._programar_refresco()
+        if self.registro_activo and not self.reloj.isActive():
+            self.reloj.start(1000)
+        if guardado:
+            self._mostrar_mensaje("Sesión renovada.", "success")
+
+    def _on_reauth_error(self, error):
+        if self._cerrando_real:
+            return
+        self._reauth_en_curso = False
+        self._reauth_cancelada = True
+        if (
+            isinstance(error, SessionExpired)
+            or getattr(error, "status_code", None) in (401, 403)
+        ):
+            self._mostrar_mensaje(
+                "Credenciales incorrectas o cuenta desactivada.",
+                "error",
+            )
+        elif isinstance(error, NetworkError):
+            self._mostrar_mensaje(
+                "Sin conexión. No se pudo reautenticar.",
+                "error",
+            )
+        else:
+            self._mostrar_mensaje(str(error), "error")
+        if self.registro_activo and not self.reloj.isActive():
+            self.reloj.start(1000)
 
     # ================= BLOQUEO / REPOSO / APAGADO =================
     def _detener_por_energia(self, motivo: str, segundos_perdidos: int):
@@ -1083,8 +1215,8 @@ class TrackerWindow(QWidget):
 
         if hasattr(self, "heartbeat"):
             self.heartbeat.stop()
-        if hasattr(self, "ping_timer"):
-            self.ping_timer.stop()
+        if hasattr(self, "_refresh_timer"):
+            self._refresh_timer.stop()
         if hasattr(self, "recordatorios"):
             self.recordatorios.detener()
         if hasattr(self, "energia"):
