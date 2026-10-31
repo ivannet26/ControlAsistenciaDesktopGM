@@ -12,7 +12,11 @@ from PySide6.QtWidgets import (
 )
 
 from app.services.api_client import ApiClient, ApiError
-from app.services.sesion import guardar_credenciales, cargar_credenciales
+from app.services.sesion import (
+    cargar_credenciales,
+    guardar_credenciales,
+    limpiar_credenciales_huerfanas,
+)
 from app.styles import login as L
 from app.ui.dialogs.registro import DialogoRegistro
 from app.ui.dialogs.alerta import alerta_error, alerta_exito
@@ -80,10 +84,7 @@ class RegistroWorker(QThread):
 # ============================================================
 class LoginWindow(QWidget):
     login_exitoso = Signal(dict)
-    auto_login_fallido = Signal()          
     cerrado = Signal()
-    MAX_INTENTOS_AUTO = 5                  
-    ESPERA_REINTENTO_MS = 10_000     
 
     def __init__(self, client: ApiClient, email: str | None = None):
         super().__init__()
@@ -92,6 +93,7 @@ class LoginWindow(QWidget):
         self.worker_registro = None
 
         self._password_visible = False
+        limpiar_credenciales_huerfanas()
 
         self.setWindowTitle("Control de Asistencia - Iniciar sesión")
         self.setWindowFlag(Qt.FramelessWindowHint)
@@ -232,7 +234,7 @@ class LoginWindow(QWidget):
         layout.addSpacing(12)
 
         # ---- Checkbox ----
-        self.check_recordar = QCheckBox("Recordar credenciales")
+        self.check_recordar = QCheckBox("Recordar correo")
         self.check_recordar.setCursor(Qt.PointingHandCursor)
         self.check_recordar.setStyleSheet(f"""
             QCheckBox {{
@@ -413,10 +415,10 @@ class LoginWindow(QWidget):
 
     # -------------------- Credenciales --------------------
     def _cargar_credenciales_guardadas(self):
-        email, password, recordar = cargar_credenciales()
-        if recordar:
+        email, recordar = cargar_credenciales()
+        if recordar and email:
             self.email_input.setText(email)
-            self.password_input.setText(password)
+            self.password_input.clear()
             self.check_recordar.setChecked(True)
             self.boton_login.setFocus()
         else:
@@ -449,12 +451,8 @@ class LoginWindow(QWidget):
 
         guardar_credenciales(
             email=self.email_input.text().strip(),
-            password=self.password_input.text(),
             recordar=self.check_recordar.isChecked(),
         )
-
-        from app.services.sesion import guardar_token
-        guardar_token(self.client.token or "")
 
         self.login_exitoso.emit(usuario)
 
@@ -523,52 +521,6 @@ class LoginWindow(QWidget):
             titulo="Error al registrar",
             mensaje=mensaje,
         )
-        # -------------------- Auto-login --------------------
-    def auto_login_si_hay_credenciales(self) -> bool:
-        """True si inició un auto-login; False si no hay credenciales guardadas."""
-        email, password, recordar = cargar_credenciales()
-        if not (recordar and email and password):
-            return False
-
-        self._auto_intentos = 0
-        print(f"[Auto-login] Iniciando para {email}...")
-        self.boton_login.setEnabled(False)
-        self.boton_login.setText("Ingresando...")
-        self._auto_login_intentar()
-        return True
-
-    def _auto_login_intentar(self):
-        self._auto_intentos += 1
-        print(f"[Auto-login] Intento {self._auto_intentos}/{self.MAX_INTENTOS_AUTO}")
-
-        # Los campos ya fueron rellenados por _cargar_credenciales_guardadas()
-        self.worker = LoginWorker(
-            self.client,
-            self.email_input.text().strip(),
-            self.password_input.text(),
-        )
-        self.worker.exito.connect(self._on_login_ok)
-        self.worker.error.connect(self._on_auto_login_error_red)
-        self.worker.error_credenciales.connect(self._on_auto_login_error_credenciales)
-        self.worker.start()
-
-    def _on_auto_login_error_red(self, mensaje: str):
-        print(f"[Auto-login] Error de red/servidor: {mensaje}")
-        if self._auto_intentos < self.MAX_INTENTOS_AUTO:
-            QTimer.singleShot(self.ESPERA_REINTENTO_MS, self._auto_login_intentar)
-        else:
-            self._auto_login_abortar()
-
-    def _on_auto_login_error_credenciales(self, mensaje: str):
-        print(f"[Auto-login] Credenciales rechazadas: {mensaje}")
-        self._auto_login_abortar()
-
-    def _auto_login_abortar(self):
-        """Se rindió el auto-login: habilita el formulario y avisa a main.py."""
-        self.boton_login.setEnabled(True)
-        self.boton_login.setText("Ingresar")
-        self.auto_login_fallido.emit()
-
     def closeEvent(self, event):
         self.cerrado.emit()
         super().closeEvent(event)

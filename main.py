@@ -15,7 +15,7 @@ from app.services.api_client import (
     NetworkError,
     SessionExpired,
 )
-from app.services import cuentas_store
+from app.services import cuentas_store, sesion
 from app.ui.login_window import LoginWindow
 from app.ui.selector_cuentas import SelectorCuentas
 from app.ui.tracker_window import TrackerWindow
@@ -99,6 +99,11 @@ def main():
 
     client = ApiClient()
 
+    try:
+        sesion.limpiar_credenciales_huerfanas()
+    except Exception:
+        logger.exception("No se pudieron limpiar credenciales viejas")
+
     # Preferencias y modo de arranque
     lanzado_por_windows = "--autostart" in sys.argv
     mostrar_al_iniciar = PS.get_bool(PS.KEY_MOSTRAR_AL_INICIAR, True)
@@ -161,6 +166,31 @@ def main():
     app.lastWindowClosed.connect(al_cerrar_ultima_ventana)
 
     # ------------------------------------------------------------
+    def eliminar_cuenta_guardada(cuenta: dict):
+        email = (cuenta.get("email") or "").strip()
+        if not email:
+            return
+
+        try:
+            cuentas_store.eliminar_cuenta(email)
+        except Exception as exc:
+            logger.exception("No se pudo descartar la cuenta")
+            _aviso_no_bloqueante(
+                "No se pudo descartar",
+                f"No se pudo borrar la cuenta guardada:\n{exc}",
+            )
+            return
+
+        try:
+            sesion.limpiar_credenciales_cuenta(email)
+        except Exception:
+            logger.exception(
+                "No se pudieron limpiar las credenciales de la cuenta"
+            )
+
+        if (estado.get("cuenta_actual_email") or "").casefold() == email.casefold():
+            estado["cuenta_actual_email"] = None
+
     def mostrar_selector():
         try:
             cuentas = cuentas_store.listar_cuentas()
@@ -179,6 +209,7 @@ def main():
 
         selector = SelectorCuentas(cuentas, client)
         selector.cuenta_seleccionada.connect(abrir_cuenta)
+        selector.cuenta_removida.connect(eliminar_cuenta_guardada)
         selector.agregar_cuenta.connect(abrir_login)
         selector.cerrado.connect(
             lambda selector=selector: al_cerrar_selector(selector)
@@ -388,16 +419,13 @@ def main():
             client.logout()
             estado["cuenta_actual_email"] = None
 
-            # Al cerrar sesión: olvidar contraseña y desactivar el auto-login
+            # Al cerrar sesión: dejar de recordar el correo.
             try:
-                from app.services.sesion import (
-                    cargar_credenciales, guardar_credenciales,
+                email, _ = sesion.cargar_credenciales()
+                sesion.guardar_credenciales(
+                    email=email or "", recordar=False
                 )
-                email, _, _ = cargar_credenciales()
-                guardar_credenciales(
-                    email=email or "", password="", recordar=False
-                )
-            except Exception as e:
+            except Exception:
                 logger.exception("No se pudieron limpiar las credenciales")
 
             mostrar_selector()
@@ -438,15 +466,13 @@ def main():
         login_inicial.cerrado.connect(
             lambda: al_cerrar_login(login_inicial)
         )
-        login_inicial.auto_login_fallido.connect(mostrar_ventana_login)
 
         def mostrar_login_inicial():
             try:
                 visible = mostrar_al_iniciar or not lanzado_por_windows
                 if visible:
                     mostrar_ventana_login()
-                hay_credenciales = login_inicial.auto_login_si_hay_credenciales()
-                if not hay_credenciales and not visible:
+                else:
                     login_inicial.showMinimized()
             except Exception:
                 logger.exception("[Login inicial] Error")

@@ -1,8 +1,7 @@
 # app/services/sesion.py
 """
-Persistencia de credenciales con QSettings.
-Guarda el email/password en el registro de Windows (~/.config en Linux/macOS).
-Opcionalmente guarda el token para auto-login.
+Persistencia del correo recordado con QSettings.
+No guarda contraseñas ni tokens.
 """
 from PySide6.QtCore import QSettings
 
@@ -16,62 +15,68 @@ def _settings() -> QSettings:
 
 
 # ============================================================
-# CREDENCIALES (email + password)
+# CREDENCIALES (solo correo)
 # ============================================================
 
-def guardar_credenciales(email: str, password: str, recordar: bool = True):
-    """Guarda o borra las credenciales según el checkbox."""
+def guardar_credenciales(email: str, recordar: bool = True):
+    """Guarda o borra el correo recordado. Nunca guarda contraseña."""
     s = _settings()
+    s.remove("auth/password")
+    s.remove("auth/token")
     if recordar:
         s.setValue("auth/recordar", True)
-        s.setValue("auth/email", email)
-        s.setValue("auth/password", password)
+        s.setValue("auth/email", (email or "").strip())
     else:
         s.setValue("auth/recordar", False)
         s.remove("auth/email")
-        s.remove("auth/password")
     s.sync()
 
 
-def cargar_credenciales() -> tuple[str, str, bool]:
-    """Devuelve (email, password, recordar)."""
+def cargar_credenciales() -> tuple[str, bool]:
+    """Devuelve (email, recordar). La contraseña no se guarda."""
     s = _settings()
     recordar = s.value("auth/recordar", False, type=bool)
     if not recordar:
-        return "", "", False
-    email = s.value("auth/email", "", type=str)
-    password = s.value("auth/password", "", type=str)
-    return email, password, True
+        return "", False
+    email = (s.value("auth/email", "", type=str) or "").strip()
+    return email, True
 
 
 def borrar_credenciales():
     s = _settings()
     s.remove("auth/email")
     s.remove("auth/password")
+    s.remove("auth/token")
     s.setValue("auth/recordar", False)
     s.sync()
 
 
-# ============================================================
-# SESIÓN (token para auto-login, opcional)
-# ============================================================
-
-def guardar_token(token: str):
+def limpiar_credenciales_cuenta(email: str) -> None:
+    """Borra las claves de QSettings si pertenecen a ese correo."""
     s = _settings()
-    s.setValue("auth/token", token or "")
+    guardado = (s.value("auth/email", "", type=str) or "").strip()
+    objetivo = (email or "").strip()
+    if not guardado or not objetivo:
+        return
+    if guardado.casefold() != objetivo.casefold():
+        return
+
+    s.remove("auth/email")
+    s.remove("auth/password")
+    s.remove("auth/token")
+    s.setValue("auth/recordar", False)
     s.sync()
 
 
-def cargar_token() -> str | None:
+def limpiar_credenciales_huerfanas() -> None:
+    """Borra SIEMPRE password/token viejos; conserva solo el correo recordado."""
     s = _settings()
-    token = s.value("auth/token", "", type=str)
-    return token or None
-
-
-def borrar_sesion():
-    """Borra token + credenciales (usar al cerrar sesión)."""
-    s = _settings()
+    s.remove("auth/password")
     s.remove("auth/token")
-    # Ojo: NO borra las credenciales al cerrar sesión,
-    # solo el token. Así el login queda precargado.
+
+    recordar = s.value("auth/recordar", False, type=bool)
+    email = (s.value("auth/email", "", type=str) or "").strip()
+    if not recordar or not email:
+        s.remove("auth/email")
+        s.setValue("auth/recordar", False)
     s.sync()

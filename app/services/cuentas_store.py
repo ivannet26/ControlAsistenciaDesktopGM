@@ -168,10 +168,18 @@ def actualizar_tokens(
     raise ValueError(f"No existe una cuenta guardada para {email}")
 
 
-def eliminar_cuenta(email: str) -> None:
-    email_normalizado = (email or "").casefold()
-    cuentas = [
-        cuenta for cuenta in _leer_cuentas()
-        if (cuenta.get("email") or "").casefold() != email_normalizado
+def eliminar_cuenta(email: str) -> bool:
+    email_normalizado = (email or "").strip().casefold()
+    if not email_normalizado:
+        return False
+
+    cuentas = _leer_cuentas()
+    restantes = [
+        cuenta for cuenta in cuentas
+        if (cuenta.get("email") or "").strip().casefold() != email_normalizado
     ]
-    _guardar_archivo(cuentas)
+    if len(restantes) == len(cuentas):
+        return False
+
+    _guardar_archivo(restantes)
+    return True
