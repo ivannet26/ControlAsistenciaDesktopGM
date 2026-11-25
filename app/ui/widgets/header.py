@@ -256,18 +256,14 @@ class HeaderWidget(QWidget):
         menu.aboutToHide.connect(self._limpiar_avatar_menu)
         menu.addSeparator()
 
-        # ---- Workspace ----
-        acc_ws = QAction("SistemasGM", self)
-        acc_ws.triggered.connect(lambda: print("[Menú] Workspace"))
-        menu.addAction(acc_ws)
+        # ---- Marcador de Asistencia (REEMPLAZA A "SistemasGM") ----
+        acc_asistencia = QAction("Marcar Asistencia", self)
+        acc_asistencia.triggered.connect(self._abrir_marcador_asistencia)
+        menu.addAction(acc_asistencia)
 
         menu.addSeparator()
 
         # ---- Opciones rápidas ----
-        #acc_actualizar = QAction("Actualizar", self)
-        #acc_actualizar.triggered.connect(self._on_actualizar)
-        #menu.addAction(acc_actualizar)
-
         acc_mini = QAction("Usar mini temporizador", self)
         acc_mini.triggered.connect(lambda: print("[Menú] Mini temporizador"))
         menu.addAction(acc_mini)
@@ -279,10 +275,10 @@ class HeaderWidget(QWidget):
         acc_pref = QAction("Preferencias", self)
         acc_pref.triggered.connect(self._abrir_preferencias)
         menu.addAction(acc_pref)
-                # ============================================================
+
+        # ============================================================
         # NUEVO: BOTÓN DE MONITOREO EN VIVO (SOLO ADMIN)
         # ============================================================
-        # Verificamos si el usuario es admin (buscando en el padre)
         es_admin = False
         ventana_padre = self.window()
         if hasattr(ventana_padre, "es_admin"):
@@ -298,25 +294,10 @@ class HeaderWidget(QWidget):
         # ============================================================
         menu.addSeparator()
 
-        # ---- Informes y ayuda ----
-        #acc_info = QAction("Informes", self)
-        #acc_info.triggered.connect(lambda: print("[Menú] Informes"))
-        #menu.addAction(acc_info)
-
-        #acc_ayuda = QAction("Ayuda de GM", self)
-        #acc_ayuda.triggered.connect(lambda: print("[Menú] Ayuda"))
-        #menu.addAction(acc_ayuda)
-
-        menu.addSeparator()
-
         # ---- Versión + feedback ----
         acc_version = QAction(f"Versión de la aplicación: {VERSION_APP}", self)
         acc_version.setEnabled(False)
         menu.addAction(acc_version)
-
-        #acc_feedback = QAction("Compartir feedback", self)
-        #acc_feedback.triggered.connect(lambda: print("[Menú] Feedback"))
-        #menu.addAction(acc_feedback)
 
         # ---- Cerrar sesión ----
         acc_cerrar = QAction("Cerrar sesión", self)
@@ -403,10 +384,10 @@ class HeaderWidget(QWidget):
         from app.ui.dialogs.preferencias import DialogoPreferencias
         dlg = DialogoPreferencias(self.window())
         dlg.exec()
+
     def _abrir_rastreador_auto(self):
         from app.ui.dialogs.rastreador_auto import VentanaRastreadorAuto
 
-        
         ventana = self
         cb = None
         while ventana is not None:
@@ -419,7 +400,6 @@ class HeaderWidget(QWidget):
             print("[Header] ⚠️  No encontré 'obtener_registros_rastreador'")
             return
 
-       
         if hasattr(self, "_rastreador_auto") and self._rastreador_auto is not None:
             try:
                 if self._rastreador_auto.isVisible():
@@ -429,7 +409,6 @@ class HeaderWidget(QWidget):
             except RuntimeError:
                 self._rastreador_auto = None
 
-        
         ventana_principal = self.window()
         usuario_actual = getattr(ventana_principal, "usuario", {}) or {}
         usuario_reporte = {
@@ -437,21 +416,35 @@ class HeaderWidget(QWidget):
             for campo in ("id", "nombre", "apellido", "email")
         }
         self._rastreador_auto = VentanaRastreadorAuto(
-            parent=None,             
+            parent=None,
             cargar_datos_cb=cb,
             usuario_id=None,
             usuario=usuario_reporte,
         )
-        self._rastreador_auto.setModal(False)   # <--- NO modal
-        self._rastreador_auto.show()            # <--- show() en lugar de exec()
+        self._rastreador_auto.setModal(False)
+        self._rastreador_auto.show()
+
     def _on_actualizar(self):
         """Recarga los datos del tracker (historial, proyectos, etc.)."""
-        # Buscamos la TrackerWindow padre y llamamos a su método
         ventana = self.window()
         if hasattr(ventana, "_cargar_historial"):
             ventana._cargar_historial()
         if hasattr(ventana, "_refrescar_cache"):
             ventana._refrescar_cache()
+
+    
+    def _abrir_marcador_asistencia(self):
+        from app.ui.dialogs.panel_asistencia import PanelAsistencia
+        ventana_padre = self.window()
+        client = getattr(ventana_padre, "client", None)
+        if client is None:
+            return
+        self.panel_asistencia = PanelAsistencia(client, parent=self)
+        self.panel_asistencia.show()
+
+    def _limpiar_panel_asistencia(self):
+        """Limpia la referencia cuando la ventana se cierra."""
+        self._panel_asistencia = None
 
     # ============================================================
     # SALIR DE LA APP
@@ -459,15 +452,14 @@ class HeaderWidget(QWidget):
     def _abrir_panel_admin(self):
         """Abre el panel de administración para ver el monitoreo en vivo."""
         from app.ui.dialogs.panel_admin_rastreador import PanelAdminRastreador
-        
+
         ventana_padre = self.window()
         client = getattr(ventana_padre, "client", None)
-        
+
         if client is None:
             print("[Header] ⚠️ No se encontró el cliente API en la ventana padre")
             return
-        
-        # 1. Verificamos si la ventana existe y sigue viva (no destruida)
+
         if hasattr(self, "_panel_admin") and self._panel_admin is not None:
             try:
                 if self._panel_admin.isVisible():
@@ -475,25 +467,21 @@ class HeaderWidget(QWidget):
                     self._panel_admin.activateWindow()
                     return
             except RuntimeError:
-                # La ventana fue destruida por Qt (C++ object deleted)
                 self._panel_admin = None
-        
-        # 2. Si llegamos aquí, creamos una nueva instancia
+
         self._panel_admin = PanelAdminRastreador(
-            client=client, 
+            client=client,
             parent=None,
-            tracker_window=ventana_padre 
+            tracker_window=ventana_padre
         )
         self._panel_admin.setModal(False)
-        
-        # 3. Cuando se cierre, limpiamos la referencia para no usar objetos muertos
         self._panel_admin.finished.connect(self._limpiar_panel_admin)
-        
         self._panel_admin.show()
 
     def _limpiar_panel_admin(self):
         """Limpia la referencia cuando el panel de admin se cierra."""
         self._panel_admin = None
+
     def _salir_app(self):
         """Cierra la aplicación completamente."""
         from PySide6.QtWidgets import QApplication

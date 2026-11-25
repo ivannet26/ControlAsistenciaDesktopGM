@@ -4,7 +4,6 @@ import json
 import os
 import threading
 import time
-
 import requests
 from dotenv import load_dotenv
 
@@ -450,3 +449,43 @@ class ApiClient:
             f"/rastreador/actividad/dia/{usuario_id}",
             params={"fecha": fecha_iso, "page": page, "limit": limit},
         )
+    def registrar_entrada(self):
+        url = f"{self.base_url}/asistencia/entrada"
+        headers = {"Authorization": f"Bearer {self.token}"}
+        response = requests.post(url, headers=headers)
+        if response.status_code == 200:
+            return response.json()
+        return None
+
+    def iniciar_break(self):
+        url = f"{self.base_url}/asistencia/break/iniciar"
+        headers = {"Authorization": f"Bearer {self.token}"}
+        response = requests.post(url, headers=headers)
+        if response.status_code == 200:
+            return response.json()
+        return None
+
+    def terminar_break(self):
+        url = f"{self.base_url}/asistencia/break/terminar"
+        headers = {"Authorization": f"Bearer {self.token}"}
+        response = requests.post(url, headers=headers)
+        if response.status_code == 200:
+            return response.json()
+        return None
+
+    def registrar_salida(self):
+        url = f"{self.base_url}/asistencia/salida"
+        headers = {"Authorization": f"Bearer {self.token}"}
+        response = requests.post(url, headers=headers)
+        if response.status_code == 200:
+            return response.json()
+        return None
+
+    def obtener_asistencia_hoy(self):
+        """Devuelve el JSON con registros y estado actual."""
+        url = f"{self.base_url}/asistencia/hoy"
+        headers = {"Authorization": f"Bearer {self.token}"}
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            return response.json()
+        return None
